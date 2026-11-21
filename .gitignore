@@ -1,0 +1,26 @@
+# 依赖与工具链
+node_modules/
+.tooling/
+.tools/
+*.tgz
+
+# 构建产物
+dist/
+
+# 模型文件（太大不入库，用脚本下载）
+models/
+tts/piper_phonemize.data
+
+# 凭据
+.credentials.yaml
+.wrangler/
+.env
+.env.*
+
+# 临时文件
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+.tooling/e2e/edge-*/
+.tooling/e2e/*.png

@@ -1,0 +1,26 @@
+# 蝈蝈听书 · 云端 TTS Worker（方案见 ../docs/cloud-tts-payment-plan.md）
+name = "tinttxt-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# KV：通行证 / 额度 / 限流 / 日预算计数
+# 首次部署前：npx wrangler kv:namespace create DATA  → 把返回 id 填到下方
+# （scripts/deploy-worker.mjs 会自动创建并回填）
+[[kv_namespaces]]
+binding = "DATA"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# CORS 白名单（逗号分隔）
+ALLOWED_ORIGINS = "https://tinttxt.pages.dev,http://127.0.0.1:8123,http://localhost:8123"
+# mock = 无 key 联调；key 到手后改 "volcano"
+TTS_PROVIDER = "mock"
+# 限额（quota.js DEFAULT_LIMITS 可被这些环境变量覆盖）
+FREE_CHARS_PER_DAY = "3600"
+TRIAL_PER_DEVICE_PER_DAY = "3"
+TRIAL_MAX_CHARS = "50"
+MAX_CHARS_PER_REQUEST = "500"
+PER_IP_PER_MINUTE = "10"
+DAILY_BUDGET_CHARS = "500000"
+
+# 密钥不进仓库：npx wrangler secret put VOLC_TTS_TOKEN

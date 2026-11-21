@@ -1,0 +1,61 @@
+{
+  "generatedAt": "2026-11-20T00:28:37.325Z",
+  "files": {
+    "tts/ASSETS.json": {
+      "bytes": 1384,
+      "sha256": "3b9b539671828c03f85d565f847d48ba60616c7e93f7fa180eb167257cade02d"
+    },
+    "tts/ort-wasm-simd-threaded.wasm": {
+      "bytes": 10684943,
+      "sha256": "86e907409c5a79b7475b6ca690e404fa5c5f5714054a3926f3b0bf40559d7d2e"
+    },
+    "tts/ort-wasm-simd.wasm": {
+      "bytes": 10595041,
+      "sha256": "f533b5f21790563d7556c611c3835ac65848ee326da2689aac54ed7d9cc8c6a4"
+    },
+    "tts/ort-wasm-threaded.wasm": {
+      "bytes": 9841732,
+      "sha256": "54c445435526af7138c6a2438b2e8103c87d4eb3e972649f2eb5fd713fadfa5c"
+    },
+    "tts/ort-wasm.wasm": {
+      "bytes": 9758086,
+      "sha256": "ebe7ec327f83aabc07e3b58487522481ccff10941f24182ab0428d0123652ff2"
+    },
+    "tts/ort.wasm.min.js": {
+      "bytes": 142930,
+      "sha256": "90533a3fd7006df7f897c0d63c468996da5c8e430e39964d92ebe586c4996614"
+    },
+    "tts/piper-runtime.js": {
+      "bytes": 15625,
+      "sha256": "de1d35445c1e72a42085ee8cea10b36d0fde5bb45ceab589c225df1971a2c0fe"
+    },
+    "tts/piper_phonemize.data": {
+      "bytes": 18077249,
+      "sha256": "29f1025eb23a5b5c192cd14a6efbce4509402ff265405072ee6f7d1a09b78f8c"
+    },
+    "tts/piper_phonemize.js": {
+      "bytes": 120714,
+      "sha256": "fef0c2fc442d24fdef5c7c7cc37d5da2314407640fe11ab1bfe347c723dff19b"
+    },
+    "tts/piper_phonemize.wasm": {
+      "bytes": 635212,
+      "sha256": "b777cd107a91d2bcc6a1ea46f2c26a662a7407394fe84589198aeaa83dd7a9d6"
+    },
+    "tts/sherpa/sherpa-onnx-tts.js": {
+      "bytes": 33227,
+      "sha256": "91bb4b3095ad4a449bb99518b15b4b31659886d808fd16656b6dce634405fcf1"
+    },
+    "tts/sherpa/sherpa-onnx-wasm-main-tts.data": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "tts/sherpa/sherpa-onnx-wasm-main-tts.js": {
+      "bytes": 111312,
+      "sha256": "fd40fa7c2bd5fbe6a565525227ff1c54e7848c87707fcc38cff12f0586ca1c8b"
+    },
+    "tts/sherpa/sherpa-onnx-wasm-main-tts.wasm": {
+      "bytes": 13473435,
+      "sha256": "d60db5247fa13e92ad291f8cb5cfe2f6823934c0fa430b177724929a587ab9fb"
+    }
+  }
+}

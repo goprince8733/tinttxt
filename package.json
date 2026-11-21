@@ -1,0 +1,16 @@
+{
+  "name": "tinttxt-audiobook",
+  "version": "0.1.0",
+  "description": "网页版 TXT 听书器：离线 TTS 分块预合成 + 真实 <audio> 后台播放 + PWA",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "build": "node scripts/build.mjs",
+    "serve": "node scripts/dev-server.mjs --no-watch",
+    "test": "node --test tests/"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

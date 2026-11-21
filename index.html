@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="system">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#0f1216" />
+  <meta name="description" content="蝈蝈听书 —— 网页版 TXT 听书器：离线 TTS 分块预合成 + 真实 audio 后台播放" />
+  <title>蝈蝈听书</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icons/favicon-32.png" type="image/png" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+  <!-- iOS PWA 支持（Safari 添加到主屏幕后全屏运行） -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="蝈蝈听书" />
+  <link rel="stylesheet" href="/styles/base.css" />
+  <link rel="stylesheet" href="/styles/layout.css" />
+  <link rel="stylesheet" href="/styles/components.css" />
+  <link rel="stylesheet" href="/styles/views.css" />
+  <script>
+    /* 主题引导（避免首屏闪烁）：只读本地偏好，业务仍在 main.js 中走 app.updateSettings */
+    try {
+      var t = localStorage.getItem('tinttxt.theme');
+      if (t === 'light' || t === 'dark' || t === 'system') document.documentElement.dataset.theme = t;
+    } catch (e) { /* 隐私模式下忽略 */ }
+  </script>
+</head>
+<body data-route="shelf">
+
+  <!-- 本地 SVG 图标精灵（无任何外链字体/图标） -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true" focusable="false">
+    <symbol id="ic-play" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5l11 6.5-11 6.5z"/></symbol>
+    <symbol id="ic-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></symbol>
+    <symbol id="ic-prev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6v12M16.5 6l-9 6 9 6z"/></symbol>
+    <symbol id="ic-next" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6v12M7.5 6l9 6-9 6z"/></symbol>
+    <symbol id="ic-prev-ch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6l-6 6 6 6M18.5 6l-6 6 6 6"/></symbol>
+    <symbol id="ic-next-ch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6l6 6-6 6M5.5 6l6 6-6 6"/></symbol>
+    <symbol id="ic-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12v16H6zM9 8h6M9 12h6"/></symbol>
+    <symbol id="ic-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h8M16 7h4M4 17h4M12 17h8"/><circle cx="14" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+    <symbol id="ic-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"/></symbol>
+    <symbol id="ic-bookmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-4-5 4z"/></symbol>
+    <symbol id="ic-more" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5.5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="18.5" r="1.8"/></symbol>
+    <symbol id="ic-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20"/></symbol>
+    <symbol id="ic-import" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></symbol>
+    <symbol id="ic-backup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h7l4 4v12H7zM14 4v4h4M12 18v-7M9.5 13.5L12 11l2.5 2.5"/></symbol>
+    <symbol id="ic-queue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h11M4 12h11M4 17h7"/><path d="M17 14l3 3-3 3" transform="translate(0 -4)"/></symbol>
+    <symbol id="ic-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v4h-4"/></symbol>
+    <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="ic-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19.5 8.5l-4-4L4 16z"/></symbol>
+    <symbol id="ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9.5 7V4.5h5V7M7 7l1 13h8l1-13"/></symbol>
+    <symbol id="ic-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.3 2.4c-.6.2-.9.8-.9 1.4v.3"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor"/></symbol>
+    <symbol id="ic-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.2 2"/></symbol>
+    <symbol id="ic-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10M7.5 10L12 14.5 16.5 10M5 19h14"/></symbol>
+    <symbol id="ic-chevron-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5L8 12l6.5 6.5"/></symbol>
+    <symbol id="ic-stats" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19V10M12 19V5M19 19v-6"/></symbol>
+  </svg>
+
+  <button type="button" class="skip-link" id="btn-skip">跳到主内容</button>
+
+  <div id="app">
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">蝈</span>
+        <span class="brand-name">蝈蝈听书</span>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="icon-btn" id="btn-help" aria-label="帮助与使用引导" title="帮助">
+          <svg class="ic" aria-hidden="true"><use href="#ic-help"></use></svg>
+        </button>
+        <button type="button" class="icon-btn" id="btn-header-settings" aria-label="打开设置" title="设置">
+          <svg class="ic" aria-hidden="true"><use href="#ic-settings"></use></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="main" tabindex="-1">
+
+      <!-- ======================= 书架页 ======================= -->
+      <section id="view-shelf" class="view view-shelf" aria-label="书架">
+        <div class="stats-bar" aria-label="收听统计">
+          <div class="stat"><span class="stat-label">今日收听</span><strong class="stat-value" id="stat-today">—</strong></div>
+          <div class="stat"><span class="stat-label">累计收听</span><strong class="stat-value" id="stat-total">—</strong></div>
+          <div class="stat"><span class="stat-label">连续天数</span><strong class="stat-value" id="stat-streak">—</strong></div>
+        </div>
+
+        <div class="toolbar">
+          <div class="search-box">
+            <svg class="ic search-ic" aria-hidden="true"><use href="#ic-search"></use></svg>
+            <input type="search" id="search-input" placeholder="按书名搜索" aria-label="按书名搜索" autocomplete="off" />
+          </div>
+          <label class="sort-box">
+            <span class="sr-only">排序方式</span>
+            <select id="sort-select" aria-label="排序方式">
+              <option value="recent-listen">最近收听</option>
+              <option value="recent-import">最近导入</option>
+              <option value="title">书名</option>
+              <option value="chars">字数</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-primary" id="btn-import">
+            <svg class="ic" aria-hidden="true"><use href="#ic-import"></use></svg>
+            <span>导入 TXT</span>
+          </button>
+          <button type="button" class="btn" id="btn-backup">
+            <svg class="ic" aria-hidden="true"><use href="#ic-backup"></use></svg>
+            <span>备份</span>
+          </button>
+        </div>
+
+        <div class="progress-panel" id="import-progress" hidden role="status" aria-live="polite">
+          <div class="progress-panel-text" id="import-progress-text">正在导入…</div>
+          <div class="progress-track"><div class="progress-fill" id="import-progress-bar" style="width:0%"></div></div>
+        </div>
+
+        <div class="empty-state" id="empty-state" hidden>
+          <div class="empty-art" aria-hidden="true">📚</div>
+          <h2 class="empty-title">书架空空如也</h2>
+          <p class="empty-text">导入一本 TXT 就能开始听书。支持 UTF-8 / GB18030 自动识别，乱码可手动选择编码。</p>
+          <div class="empty-actions">
+            <button type="button" class="btn btn-primary" id="btn-empty-import">导入第一本 TXT</button>
+            <button type="button" class="btn btn-ghost" id="btn-empty-guide">查看使用引导</button>
+          </div>
+        </div>
+
+        <ul class="book-list" id="book-list" aria-label="书籍列表"></ul>
+
+        <input type="file" id="file-input" accept=".txt,text/plain" multiple hidden />
+        <input type="file" id="backup-input" accept=".json,application/json" hidden />
+
+        <footer class="app-footer">
+          蝈蝈听书 · 作者邮箱：<a href="mailto:13300255@qq.com">13300255@qq.com</a>
+        </footer>
+      </section>
+
+      <!-- ======================= 阅读播放页 ======================= -->
+      <section id="view-player" class="view view-player" aria-label="阅读播放">
+        <div class="model-banner" id="model-banner" hidden role="status">
+          <div class="model-banner-main">
+            <p class="model-banner-text" id="model-banner-text">本地模型未下载，当前为系统朗读预览（锁屏会中断）</p>
+            <div class="progress-track model-banner-track" id="model-banner-track" hidden>
+              <div class="progress-fill" id="model-banner-bar" style="width:0%"></div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-warn" id="btn-download-model">
+            <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg>
+            <span id="btn-download-model-text">下载模型</span>
+          </button>
+        </div>
+
+        <div class="reader-top">
+          <button type="button" class="icon-btn" id="btn-back" aria-label="返回书架">
+            <svg class="ic" aria-hidden="true"><use href="#ic-chevron-left"></use></svg>
+          </button>
+          <h2 class="reader-title" id="player-title">未打开书籍</h2>
+          <label class="chapter-box">
+            <span class="sr-only">选择章节</span>
+            <select id="chapter-select" aria-label="选择章节" disabled><option>—</option></select>
+          </label>
+          <label class="switch-inline" title="跟随朗读自动滚动">
+            <input type="checkbox" id="follow-toggle" checked />
+            <span>跟随朗读</span>
+          </label>
+          <button type="button" class="icon-btn" id="btn-bookmarks" aria-label="打开书签列表">
+            <svg class="ic" aria-hidden="true"><use href="#ic-bookmark"></use></svg>
+          </button>
+          <div class="more-wrap">
+            <button type="button" class="icon-btn" id="btn-more" aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">
+              <svg class="ic" aria-hidden="true"><use href="#ic-more"></use></svg>
+            </button>
+            <div class="menu" id="more-menu" role="menu" hidden>
+              <button type="button" role="menuitem" class="menu-item" id="btn-m-font">字号与行距…</button>
+              <button type="button" role="menuitem" class="menu-item" id="btn-m-split">手动标记章节…</button>
+              <button type="button" role="menuitem" class="menu-item" id="btn-m-merge">合并本章到上一章</button>
+              <button type="button" role="menuitem" class="menu-item" id="btn-m-rename">重命名书籍…</button>
+              <button type="button" role="menuitem" class="menu-item" id="btn-m-stats">查看统计…</button>
+              <button type="button" role="menuitem" class="menu-item menu-item-danger" id="btn-m-delete">删除本书…</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="reader-scroll" id="reader-scroll">
+          <div class="reader-empty" id="reader-empty" hidden>
+            <p>还没有打开书籍。</p>
+            <button type="button" class="btn btn-primary" id="btn-go-shelf">去书架选一本</button>
+          </div>
+          <article class="reader-content" id="reader-content" aria-label="正文"></article>
+        </div>
+
+        <div class="hud">
+          <div class="hud-status">
+            <span class="badge badge-idle" id="state-badge" role="status" aria-live="polite">未播放</span>
+            <button type="button" class="sleep-quick-btn" id="btn-sleep-quick" title="定时关闭" aria-label="定时关闭">
+              <svg class="ic" aria-hidden="true"><use href="#ic-clock"></use></svg><span>定时</span>
+            </button>
+            <span class="sleep-label" id="sleep-label" hidden><svg class="ic" aria-hidden="true"><use href="#ic-clock"></use></svg><span id="sleep-countdown"></span></span>
+            <span class="hud-hint" id="follow-hint" hidden>自动滚动已暂停（手动滚动过）</span>
+          </div>
+
+          <div class="error-panel" id="error-panel" hidden role="alert">
+            <p class="error-text" id="error-text">播放出错</p>
+            <button type="button" class="btn btn-primary" id="btn-retry">重试</button>
+          </div>
+
+          <div class="progress-meta">
+            <span id="pos-info">第 0 / 0 句</span>
+            <span class="meta-sep" aria-hidden="true">·</span>
+            <span id="chapter-progress">本章 0%</span>
+            <span class="meta-sep" aria-hidden="true">·</span>
+            <span id="book-progress">全书 0%</span>
+            <span class="meta-sep" aria-hidden="true">·</span>
+            <span id="remain-info">剩余 —</span>
+          </div>
+
+          <div class="seek-row">
+            <input type="range" id="seek-range" min="0" max="100" step="1" value="0" aria-label="全书进度（按字符定位）" />
+          </div>
+
+          <div class="controls">
+            <div class="transport" role="group" aria-label="播放控制">
+              <button type="button" class="icon-btn ctl" id="btn-prev-ch" aria-label="上一章"><svg class="ic" aria-hidden="true"><use href="#ic-prev-ch"></use></svg></button>
+              <button type="button" class="icon-btn ctl" id="btn-prev" aria-label="上一句"><svg class="ic" aria-hidden="true"><use href="#ic-prev"></use></svg></button>
+              <button type="button" class="play-btn" id="btn-play" aria-label="播放"><svg class="ic" aria-hidden="true"><use href="#ic-play"></use></svg></button>
+              <button type="button" class="icon-btn ctl" id="btn-next" aria-label="下一句"><svg class="ic" aria-hidden="true"><use href="#ic-next"></use></svg></button>
+              <button type="button" class="icon-btn ctl" id="btn-next-ch" aria-label="下一章"><svg class="ic" aria-hidden="true"><use href="#ic-next-ch"></use></svg></button>
+            </div>
+
+            <div class="ctl-grid">
+              <label class="ctl-field">
+                <span class="ctl-label">语速 <output id="rate-val" for="rate-range">1.00×</output></span>
+                <input type="range" id="rate-range" min="0.5" max="2" step="0.05" value="1" aria-label="语速" />
+              </label>
+              <label class="ctl-field">
+                <span class="ctl-label">音量 <output id="vol-val" for="vol-range">100%</output></span>
+                <input type="range" id="vol-range" min="0" max="1" step="0.01" value="1" aria-label="音量" />
+              </label>
+              <label class="ctl-field">
+                <span class="ctl-label">音色</span>
+                <div class="voice-row">
+                  <select id="voice-select" aria-label="音色选择"><option value="">默认</option></select>
+                  <button type="button" class="btn btn-xs btn-primary" id="btn-voice-preview" aria-label="试听当前音色" title="试听">▶</button>
+                </div>
+              </label>
+              <label class="ctl-field">
+                <span class="ctl-label">定时关闭</span>
+                <select id="sleep-select" aria-label="定时关闭">
+                  <option value="off">关闭</option>
+                  <option value="15">15 分钟</option>
+                  <option value="30">30 分钟</option>
+                  <option value="60">60 分钟</option>
+                  <option value="chapter">读完本章</option>
+                  <option value="custom">自定义…</option>
+                </select>
+              </label>
+              <div class="ctl-actions">
+                <button type="button" class="btn btn-sm" id="btn-add-mark">
+                  <svg class="ic" aria-hidden="true"><use href="#ic-bookmark"></use></svg><span>加书签</span>
+                </button>
+                <button type="button" class="btn btn-sm" id="btn-export-chapter">
+                  <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span>导出本章</span>
+                </button>
+                <button type="button" class="btn btn-sm" id="btn-export-book">
+                  <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span>导出全书</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 后台播放自检页 ======================= -->
+      <section id="view-diag" class="view view-diag" aria-label="后台播放自检">
+        <div class="diag-head">
+          <button type="button" class="icon-btn" id="btn-diag-back" aria-label="返回书架">
+            <svg class="ic" aria-hidden="true"><use href="#ic-chevron-left"></use></svg>
+          </button>
+          <h2>后台播放自检</h2>
+          <button type="button" class="btn btn-sm" id="btn-diag-refresh">
+            <svg class="ic" aria-hidden="true"><use href="#ic-refresh"></use></svg><span>刷新快照</span>
+          </button>
+        </div>
+
+        <p class="diag-note">数据来自播放层诊断心跳（Events.DIAG / player._diag()）。心跳停止说明页面被系统冻结。
+          <b>一眼分辨断音原因</b>：心跳停 + 在途 fetch 冻在原地 = 页面被冻结；心跳在走 + connection 断/在途 fetch 挂着不动 = 网络断了。</p>
+
+        <dl class="diag-grid">
+          <div class="diag-item"><dt>audio 播放状态</dt><dd id="d-audio">—</dd></div>
+          <div class="diag-item"><dt>MediaSession playbackState</dt><dd id="d-media">—</dd></div>
+          <div class="diag-item"><dt>Wake Lock 状态</dt><dd id="d-wake">—</dd></div>
+          <div class="diag-item"><dt>最后心跳时间</dt><dd id="d-heartbeat">—</dd></div>
+          <div class="diag-item"><dt>当前块 / 总块 / 已缓存</dt><dd id="d-chunk">—</dd></div>
+          <div class="diag-item"><dt>visibility</dt><dd id="d-visibility">—</dd></div>
+          <div class="diag-item"><dt>connection</dt><dd id="d-connection">—</dd></div>
+          <div class="diag-item"><dt>在途 fetch 请求</dt><dd id="d-inflight">—</dd></div>
+          <div class="diag-item"><dt>生效推理 EP</dt><dd id="d-ep">—</dd></div>
+          <div class="diag-item"><dt>熄屏 / 恢复记录</dt><dd id="d-vis-history">—</dd></div>
+          <div class="diag-item"><dt>DOM 中 audio 元素数量</dt><dd id="d-audio-count">—</dd></div>
+          <div class="diag-item"><dt>播放意图 wantPlaying</dt><dd id="d-want">—</dd></div>
+          <div class="diag-item"><dt>快照时间</dt><dd id="d-updated">—</dd></div>
+        </dl>
+
+        <h3 class="diag-subtitle">最近日志（30 条）</h3>
+        <ol class="log-list" id="diag-log" aria-live="off"></ol>
+
+        <h3 class="diag-subtitle">速度自测（真机验收 §3）</h3>
+        <p class="diag-note">固定三段文本、不缩句不调参：报告 navigator.gpu、生效 EP、首次合成预热、各段 RTF、
+          连续 60 秒降速比（发热代理指标）。<b>真机流程</b>：手机打开本页 → 点「跑 RTF 自测」→ 锁屏 10 秒再回来 →
+          看「熄屏/恢复记录」与心跳是否继续 → 整屏截图提交。</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary btn-sm" id="btn-rtf-test">跑 RTF 自测（约 1~3 分钟）</button>
+        </div>
+        <pre class="rtf-result" id="d-rtf-result">尚未运行。跑完后本框内容可直接截图提交。</pre>
+
+        <h3 class="diag-subtitle">发音试听 A/B（真机音质定性）</h3>
+        <p class="diag-note">同一句固定文本分别用两个引擎合成并播放 —— <b>用耳朵判断</b>：Piper 是否可懂（是否"鸟语"）、
+          sherpa 是否吐字清晰。要求两个引擎的模型都已下载（设置页有下载按钮）。</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-sm btn-primary" id="btn-listen-piper">▶ 试听 Piper（快）</button>
+          <button type="button" class="btn btn-sm" id="btn-listen-sherpa">▶ 试听 sherpa（慢但稳）</button>
+          <span class="field-note" id="listen-status" role="status" aria-live="polite"></span>
+        </div>
+
+        <h3 class="diag-subtitle">后台播放测试引导</h3>
+        <ol class="guide-list">
+          <li>
+            <strong>① 开始播放</strong>
+            <span class="expect">预期：状态徽标显示「播放中」，正文逐句高亮前进，进度条持续走动。</span>
+          </li>
+          <li>
+            <strong>② 锁屏 ≥10 秒，并跨过一个音频块（约 1–2 分钟处）</strong>
+            <span class="expect">预期：解锁后自动继续播放；MediaSession 显示书名与暂停键；日志里心跳先停止、恢复后继续刷新；块索引已推进（跨块成功）。</span>
+          </li>
+          <li>
+            <strong>③ 切到微信停留 60 秒</strong>
+            <span class="expect">预期：返回本页后播放继续（若被系统打断会提示「点继续恢复」，点播放即可），进度不丢失。</span>
+          </li>
+          <li>
+            <strong>④ 连接蓝牙耳机</strong>
+            <span class="expect">预期：耳机的播放/暂停、上一句/下一句键可控；锁屏卡片同样可控。</span>
+          </li>
+        </ol>
+
+        <h3 class="diag-subtitle">华为 / EMUI 白名单设置路径</h3>
+        <ul class="plain-list">
+          <li>手机管家 → 应用启动管理 → 关闭「自动管理」→ 手动允许「自启动 / 关联启动 / 后台活动」。</li>
+          <li>设置 → 电池 → 受保护应用 → 把浏览器加入名单。</li>
+          <li>浏览器设置 → 关闭「省流加速 / 云端加速 / 极速模式」。</li>
+          <li>浏览器实验室 → 媒体控制 → 允许「网页后台播放音频」。</li>
+          <li>系统设置 → 添加桌面快捷方式时注意：华为浏览器「添加到桌面」可能只是<b>网址快捷方式</b>（普通书签），不等于 PWA，离线打开可能失效。</li>
+        </ul>
+
+        <h3 class="diag-subtitle">限制清单</h3>
+        <ul class="plain-list limit-list">
+          <li><b>系统朗读预览不满足熄屏约束：</b>本地模型未下载时临时用系统朗读，切后台 / 锁屏会被中断，下载本地模型后即消失。</li>
+          <li><b>本地模型首次需联网下载：</b>标准档 63MB / 省流档 21MB，下载后完全离线，本地合成时文本不出设备。</li>
+          <li><b>云端 TTS 默认关闭：</b>开启需隐私确认；开启后每段文本会发送到你配置的云端服务器。</li>
+          <li><b>iOS / Safari 能力缺失：</b>MediaSession 锁屏控制、Wake Lock 可能不可用，界面会显示「不支持」而不是报错。</li>
+          <li><b>页面被冻结：</b>长时间后台时浏览器可能冻结 JS，心跳停止即为证据；需按上面的白名单路径放行。</li>
+          <li><b>音频导出：</b>未缓存的块会在导出现场合成（整本导出耗时较长，可随时取消）；只有全书无可朗读内容时才提示「没有可导出的音频」。</li>
+          <li><b>跳行规则 / 章节正则 / 标点策略：</b>修改后需重新打开书籍才会重建句子结构。</li>
+          <li><b>手动标记章节：</b>在当前会话内生效并写回书库；重新打开书籍时若正则仍能识别，会按章节正则重新切分。</li>
+        </ul>
+      </section>
+    </main>
+
+    <!-- 底部常驻播放条 -->
+    <div class="mini-player" id="mini-player" hidden>
+      <button type="button" class="mini-open" id="mini-open" aria-label="展开播放页">
+        <span class="mini-title" id="mini-title">—</span>
+        <span class="mini-sentence" id="mini-sentence"></span>
+        <span class="mini-track"><span class="mini-fill" id="mini-progress-bar" style="width:0%"></span></span>
+      </button>
+      <div class="mini-controls">
+        <button type="button" class="icon-btn" id="btn-mini-prev" aria-label="上一句"><svg class="ic" aria-hidden="true"><use href="#ic-prev"></use></svg></button>
+        <button type="button" class="play-btn play-btn-sm" id="btn-mini-play" aria-label="播放"><svg class="ic" aria-hidden="true"><use href="#ic-play"></use></svg></button>
+        <button type="button" class="icon-btn" id="btn-mini-next" aria-label="下一句"><svg class="ic" aria-hidden="true"><use href="#ic-next"></use></svg></button>
+        <button type="button" class="icon-btn" id="btn-mini-sleep" aria-label="定时关闭" title="定时关闭"><svg class="ic" aria-hidden="true"><use href="#ic-clock"></use></svg></button>
+      </div>
+    </div>
+
+    <!-- 底部 Tab -->
+    <nav class="tabbar" aria-label="主导航">
+      <button type="button" class="tab is-active" data-tab="shelf">
+        <svg class="ic" aria-hidden="true"><use href="#ic-book"></use></svg><span>书架</span>
+      </button>
+      <button type="button" class="tab" data-tab="player">
+        <svg class="ic" aria-hidden="true"><use href="#ic-play"></use></svg><span>播放</span>
+      </button>
+      <button type="button" class="tab" data-tab="settings">
+        <svg class="ic" aria-hidden="true"><use href="#ic-settings"></use></svg><span>设置</span>
+      </button>
+      <button type="button" class="tab" data-tab="diag">
+        <svg class="ic" aria-hidden="true"><use href="#ic-activity"></use></svg><span>自检</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- 抽屉遮罩（设置 / 书签共用） -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+
+  <!-- ======================= 设置抽屉 ======================= -->
+  <aside id="settings-drawer" class="drawer drawer-right" aria-label="设置" aria-hidden="true">
+    <div class="drawer-head">
+      <h2 class="drawer-title">设置</h2>
+      <button type="button" class="icon-btn" id="btn-settings-close" aria-label="关闭设置"><svg class="ic" aria-hidden="true"><use href="#ic-close"></use></svg></button>
+    </div>
+    <div class="drawer-body">
+
+      <section class="set-group">
+        <h3 class="set-title">外观</h3>
+        <div class="field">
+          <span class="field-label" id="theme-label">主题</span>
+          <div class="seg" role="radiogroup" aria-labelledby="theme-label">
+            <button type="button" class="seg-btn" role="radio" data-theme-value="light" aria-checked="false">浅色</button>
+            <button type="button" class="seg-btn" role="radio" data-theme-value="dark" aria-checked="false">深色</button>
+            <button type="button" class="seg-btn" role="radio" data-theme-value="system" aria-checked="true">跟随系统</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">朗读</h3>
+        <label class="field field-col">
+          <span class="field-label">语速 <output id="set-rate-val" for="set-rate">1.00×</output></span>
+          <input type="range" id="set-rate" min="0.5" max="2" step="0.05" value="1" />
+        </label>
+        <label class="field field-col">
+          <span class="field-label">音量 <output id="set-vol-val" for="set-vol">100%</output></span>
+          <input type="range" id="set-vol" min="0" max="1" step="0.01" value="1" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-text">朗读标点（readPunctuation）<small>修改后需重新打开书籍生效</small></span>
+          <input type="checkbox" class="switch" id="chk-punct" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-text">数字正则化（normalizeNumbers）<small>修改后需重新打开书籍生效</small></span>
+          <input type="checkbox" class="switch" id="chk-numbers" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-text">引号内对话切另一音色（dialogueVoice）</span>
+          <input type="checkbox" class="switch" id="chk-dialogue" />
+        </label>
+        <p class="field-note warn-note" id="dialogue-note" hidden>当前引擎不支持对话音色，已降级忽略</p>
+        <label class="switch-row">
+          <span class="switch-text">云端 TTS（默认关闭）<small>开启前会再次确认隐私影响</small></span>
+          <input type="checkbox" class="switch" id="chk-cloud" />
+        </label>
+        <p class="field-note" id="cloud-note" hidden>云端 TTS 已开启：每段文本将发送到你配置的云端服务器。</p>
+        <div class="field-row" id="cloud-endpoint-row" hidden>
+          <label class="field-label" for="cloud-endpoint">云端 TTS 端点 URL</label>
+          <input type="url" id="cloud-endpoint" class="input" placeholder="https://your-server.example.com/tts"
+                 autocomplete="off" spellcheck="false" aria-describedby="cloud-endpoint-hint" />
+          <p class="field-note" id="cloud-endpoint-hint">需为接受 POST JSON（text/voice/rate/format）并返回音频的接口；未填写时云端开关无法启用。</p>
+        </div>
+        <label class="switch-row">
+          <span class="switch-text">保持亮屏（Wake Lock）</span>
+          <input type="checkbox" class="switch" id="chk-wakelock" />
+        </label>
+        <p class="field-note" id="wakelock-note" hidden></p>
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">跳行规则</h3>
+        <label class="switch-row">
+          <span class="switch-text">跳过空行（skipEmptyLines）</span>
+          <input type="checkbox" class="switch" id="chk-skip-empty" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-text">跳过注释 / 说明行（skipNotes）</span>
+          <input type="checkbox" class="switch" id="chk-skip-notes" />
+        </label>
+        <label class="switch-row">
+          <span class="switch-text">跳过分隔线（skipSeparators）</span>
+          <input type="checkbox" class="switch" id="chk-skip-separators" />
+        </label>
+        <p class="field-note" id="skip-hint">修改后需重新打开书籍生效。</p>
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">章节识别</h3>
+        <label class="field field-col">
+          <span class="field-label">章节正则（行首匹配，多行模式）</span>
+          <textarea id="txt-regex" rows="5" spellcheck="false" autocomplete="off"></textarea>
+        </label>
+        <div class="btn-row">
+          <button type="button" class="btn btn-sm" id="btn-regex-default">恢复默认</button>
+          <button type="button" class="btn btn-sm btn-primary" id="btn-regex-test">测试</button>
+        </div>
+        <p class="field-note" id="regex-result" role="status" aria-live="polite">修改后需重新打开书籍生效。</p>
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">TTS 引擎</h3>
+        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-sherpa" value="local-sherpa" /><span>本地离线 · sherpa-onnx（默认：吐字清晰，Apache-2.0 可商用；单线程合成较慢）</span></label>
+        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-piper" value="local-piper" /><span>本地离线 · Piper 中文（合成快，但真机实测发音清晰度差；含 GPL 组件，仅个人非商业）</span></label>
+        <p class="field-note" id="engine-note">默认为 sherpa：真机 A/B 试听实测吐字清晰、听得懂；Piper 虽快但发音质量不达标（x_low 档还缺声调）。两档均为本地合成，文本不出设备（云端 TTS 时文本会发送到服务器）。</p>
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">模型档位</h3>
+        <div id="tier-sherpa-group">
+          <label class="radio-row"><input type="radio" name="model-tier" id="tier-int8" value="int8" /><span>省流档 int8 · 39MB（Apache 可商用）</span></label>
+          <label class="radio-row"><input type="radio" name="model-tier" id="tier-full" value="full" /><span>标准档 full · 121MB</span></label>
+        </div>
+        <div id="tier-piper-group" hidden>
+          <label class="radio-row"><input type="radio" name="model-tier" id="tier-medium" value="medium" /><span>标准音质 medium · 63MB（推荐：发音完整，含声调）</span></label>
+          <label class="radio-row"><input type="radio" name="model-tier" id="tier-xlow" value="x_low" /><span>省流音质 x_low · 21MB（⚠️ 无声调：发音清晰度明显较差，不建议）</span></label>
+          <p class="field-note warn-note">⚠️ Piper 音色 huayan 许可为 Unknown（medium 档含非商用训练链），不可商用。</p>
+        </div>
+        <p class="field-note" id="tier-note">切换档位后需重新下载模型（点下面的按钮，进度实时显示在这里）。</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-sm btn-primary" id="btn-settings-download">
+            <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span id="btn-settings-download-text">下载当前档位模型</span>
+          </button>
+          <span class="field-note" id="settings-download-status" role="status" aria-live="polite"></span>
+        </div>
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">自定义音色模型</h3>
+        <p class="field-note" id="voice-privacy-note">
+          模型文件仅保存在本机浏览器缓存中，不会上传；应用不附带这些模型，请自行确认所选模型的授权允许你的用途。
+        </p>
+        <p class="field-note" id="voice-import-hint">导入时需同时选中配对的 <b>xxx.onnx</b> 与 <b>xxx.onnx.json</b>（可多选）。</p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-sm btn-primary" id="btn-import-voice">
+            <svg class="ic" aria-hidden="true"><use href="#ic-import"></use></svg><span>导入模型文件</span>
+          </button>
+          <button type="button" class="btn btn-sm" id="btn-use-builtin-voice">回到内置音色</button>
+        </div>
+        <div class="voice-list" id="custom-voice-list" role="list" aria-label="已导入的自定义音色">
+          <p class="voice-empty" id="custom-voice-empty">尚未导入自定义音色。</p>
+        </div>
+        <input type="file" id="voice-file-input" accept=".onnx,.json,application/json" multiple hidden />
+      </section>
+
+      <section class="set-group">
+        <h3 class="set-title">关于</h3>
+        <p class="about-text">
+          蝈蝈听书 · 版本 0.1.0<br />
+          纯前端离线听书：断句 / 章节 / TTS / 播放分层架构，音频经真实 &lt;audio&gt; 播放以获得系统后台豁免。<br />
+          本地模型与运行时全部自托管，本地合成时文本不出设备；无任何第三方 CDN 依赖，离线可开。<br />
+          作者邮箱：<a href="mailto:13300255@qq.com">13300255@qq.com</a>
+        </p>
+      </section>
+    </div>
+  </aside>
+
+  <!-- ======================= 书签抽屉 ======================= -->
+  <aside id="marks-drawer" class="drawer drawer-right" aria-label="书签" aria-hidden="true">
+    <div class="drawer-head">
+      <h2 class="drawer-title">书签</h2>
+      <button type="button" class="icon-btn" id="btn-marks-close" aria-label="关闭书签列表"><svg class="ic" aria-hidden="true"><use href="#ic-close"></use></svg></button>
+    </div>
+    <div class="drawer-body">
+      <div class="marks-empty" id="marks-empty" hidden>还没有书签，播放时点「加书签」记录当前位置。</div>
+      <ul class="marks-list" id="marks-list"></ul>
+    </div>
+  </aside>
+
+  <!-- ======================= 首次使用引导 ======================= -->
+  <div class="onboarding" id="onboarding" hidden role="dialog" aria-modal="true" aria-labelledby="ob-title">
+    <div class="ob-card">
+      <h2 class="ob-title" id="ob-title">快速上手（1/4）</h2>
+      <div class="ob-steps">
+        <div class="ob-step" data-step="1">
+          <span class="ob-num">①</span>
+          <h3>导入 TXT</h3>
+          <p>在书架点「导入 TXT」，可一次多选。自动识别 UTF-8 / GB18030 等编码；若提示乱码，选择候选编码后重试即可。</p>
+        </div>
+        <div class="ob-step" data-step="2" hidden>
+          <span class="ob-num">②</span>
+          <h3>下载本地模型</h3>
+          <p>播放页顶部点「下载模型」：标准档 63MB、省流档 21MB。下载完成后完全离线朗读，文字不离开设备，锁屏也能续播。</p>
+        </div>
+        <div class="ob-step" data-step="3" hidden>
+          <span class="ob-num">③</span>
+          <h3>添加到桌面</h3>
+          <p>用浏览器菜单的「添加到主屏幕 / 安装应用」把听书器放到桌面。<b>注意：华为浏览器「添加到桌面」可能只是网址快捷方式（普通书签），并不等于 PWA，离线打开可能失效。</b></p>
+        </div>
+        <div class="ob-step" data-step="4" hidden>
+          <span class="ob-num">④</span>
+          <h3>后台白名单（熄屏续播关键）</h3>
+          <p><b>熄屏续播需把浏览器加入受保护应用 / 自启动白名单</b>：手机管家 → 应用启动管理 → 关闭自动管理 → 允许自启动 / 关联启动 / 后台活动；设置 → 电池 → 受保护应用。另请关闭浏览器的省流加速 / 极速模式。</p>
+        </div>
+      </div>
+      <div class="ob-dots" aria-hidden="true">
+        <span class="ob-dot is-on"></span><span class="ob-dot"></span><span class="ob-dot"></span><span class="ob-dot"></span>
+      </div>
+      <div class="ob-actions">
+        <button type="button" class="btn btn-ghost" id="ob-prev" disabled>上一步</button>
+        <button type="button" class="btn btn-ghost" id="ob-skip">跳过</button>
+        <button type="button" class="btn btn-primary" id="ob-next">下一步</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用容器 -->
+  <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
+  <div id="modal-root" class="modal-root"></div>
+  <div id="busy-overlay" class="busy-overlay" hidden><div class="busy-box"><span class="spinner" aria-hidden="true"></span><span id="busy-text">处理中…</span></div></div>
+
+  <!-- PWA 安装引导横幅 -->
+  <div class="install-banner" id="install-banner" hidden role="status">
+    <div class="install-banner-content">
+      <span class="install-banner-icon">📱</span>
+      <div class="install-banner-text">
+        <strong>安装「蝈蝈听书」到桌面</strong>
+        <span class="install-banner-sub">全屏体验 · 后台播放更稳 · 一点即开</span>
+      </div>
+    </div>
+    <div class="install-banner-actions">
+      <button type="button" class="btn btn-sm btn-primary" id="btn-install-yes">安装</button>
+      <button type="button" class="btn btn-sm" id="btn-install-no">暂不</button>
+    </div>
+  </div>
+
+  <!-- 字号与行距调节面板 -->
+  <div class="font-panel" id="font-panel" hidden role="dialog" aria-label="字号与行距">
+    <div class="font-panel-inner">
+      <h3>字号与行距</h3>
+      <label class="ctl-field">
+        <span class="ctl-label">字号 <output id="font-size-val">1.05rem</output></span>
+        <input type="range" id="font-size-range" min="0.85" max="1.6" step="0.05" value="1.05" aria-label="字号" />
+      </label>
+      <label class="ctl-field">
+        <span class="ctl-label">行距 <output id="line-height-val">1.95</output></span>
+        <input type="range" id="line-height-range" min="1.5" max="2.5" step="0.1" value="1.95" aria-label="行距" />
+      </label>
+      <div class="font-panel-actions">
+        <button type="button" class="btn btn-sm" id="btn-font-reset">恢复默认</button>
+        <button type="button" class="btn btn-sm btn-primary" id="btn-font-close">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <noscript><p style="padding:1rem">本应用需要启用 JavaScript 才能运行。</p></noscript>
+
+  <!-- Service Worker 桥接：注册 /sw.js 并把 SW 更新广播转为 __SW_UPDATE__ 事件（渐进增强，失败静默） -->
+  <script src="/scripts/sw-bridge.js"></script>
+
+  <!-- PWA 安装引导：拦截 beforeinstallprompt，显示自定义横幅 -->
+  <script>
+    (function () {
+      // 已经是独立 App 模式 → 不显示安装引导
+      if (window.matchMedia('(display-mode: standalone)').matches) return;
+      // 用户已关闭过 → 7 天内不再弹
+      try {
+        var dismissed = localStorage.getItem('tinttxt.installBannerDismissed');
+        if (dismissed && Date.now() - Number(dismissed) < 7 * 86400000) return;
+      } catch (e) { /* ignore */ }
+
+      var deferred = null;
+      var banner = document.getElementById('install-banner');
+      if (!banner) return;
+
+      // iOS Safari 不触发 beforeinstallprompt → 显示手动引导
+      var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (isIOS) {
+        banner.hidden = false;
+        var sub = banner.querySelector('.install-banner-sub');
+        if (sub) sub.textContent = '点浏览器底部「分享」→「添加到主屏幕」';
+        var yes = document.getElementById('btn-install-yes');
+        if (yes) yes.textContent = '知道了';
+      }
+
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        deferred = e;
+        banner.hidden = false;
+      });
+
+      document.getElementById('btn-install-yes').addEventListener('click', function () {
+        if (isIOS) {
+          banner.hidden = true;
+          return;
+        }
+        if (!deferred) {
+          // 没有 deferred：浏览器已安装或不支持 → 提示手动安装
+          banner.hidden = true;
+          try { localStorage.setItem('tinttxt.installBannerDismissed', String(Date.now())); } catch (e) { /* ignore */ }
+          return;
+        }
+        // 关键：先不隐藏横幅，等 userChoice 确认后再隐藏。
+        // 某些浏览器（360Browser/ArkWeb）prompt() 会闪一下就关（安装流程不完整），
+        // 如果提前隐藏横幅，用户就"闪一下回到原页面"且引导消失了。
+        try {
+          deferred.prompt();
+          deferred.userChoice.then(function (choice) {
+            deferred = null;
+            if (choice && choice.outcome === 'accepted') {
+              banner.hidden = true;
+            } else {
+              // 用户取消或浏览器拒绝 → 显示手动安装引导
+              banner.hidden = false;
+              var sub = banner.querySelector('.install-banner-sub');
+              if (sub) sub.textContent = '自动安装失败，请手动操作：浏览器菜单 →「添加到主屏幕」';
+              var yes = document.getElementById('btn-install-yes');
+              if (yes) yes.textContent = '知道了';
+            }
+          }).catch(function () {
+            // userChoice reject（浏览器实现不完整）
+            deferred = null;
+            banner.hidden = false;
+            var sub = banner.querySelector('.install-banner-sub');
+            if (sub) sub.textContent = '自动安装不支持，请手动操作：浏览器菜单 →「添加到主屏幕」';
+            var yes = document.getElementById('btn-install-yes');
+            if (yes) yes.textContent = '知道了';
+          });
+        } catch (e) {
+          // prompt() 直接抛异常（浏览器不支持）
+          deferred = null;
+          banner.hidden = false;
+          var sub = banner.querySelector('.install-banner-sub');
+          if (sub) sub.textContent = '自动安装不支持，请手动操作：浏览器菜单 →「添加到主屏幕」';
+          var yes = document.getElementById('btn-install-yes');
+          if (yes) yes.textContent = '知道了';
+        }
+      });
+
+      document.getElementById('btn-install-no').addEventListener('click', function () {
+        banner.hidden = true;
+        try { localStorage.setItem('tinttxt.installBannerDismissed', String(Date.now())); } catch (e) { /* ignore */ }
+      });
+
+      // 安装成功后隐藏横幅
+      window.addEventListener('appinstalled', function () {
+        banner.hidden = true;
+        deferred = null;
+      });
+    })();
+  </script>
+
+  <!-- 百度统计（hm.baidu.com）：token 同 panmian 站点（../panmian/site/assets/analytics.js）。
+       跨域脚本/信标在 COEP: credentialless 下放行（require-corp 会被拦，见 _headers）。
+       localhost/127.0.0.1 不注入：本地开发与自动化门禁不污染线上统计。 -->
+  <script>
+    var _hmt = _hmt || [];
+    (function () {
+      var h = location.hostname;
+      if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return;
+      var hm = document.createElement('script');
+      hm.src = 'https://hm.baidu.com/hm.js?79d072285b218de43d09fe4410afa1f9';
+      hm.async = true;
+      var s = document.getElementsByTagName('script')[0];
+      s.parentNode.insertBefore(hm, s);
+    })();
+  </script>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

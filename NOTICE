@@ -1,0 +1,70 @@
+TintTXT — 网页版 TXT 听书器
+Copyright © 2026 TintTXT contributors
+
+本产品是独立开发的网页应用。以下列出随产品分发或在产品运行时加载的
+第三方组件及其许可证。完整说明见 THIRD_PARTY_LICENSES.md。
+
+================================================================================
+默认 TTS 引擎档（sherpa-onnx + vits-zh-aishell3）—— Apache License 2.0
+================================================================================
+
+1. sherpa-onnx（TTS WASM 运行时，lexicon 文本前端）
+   Copyright The sherpa-onnx Authors
+   许可证：Apache License 2.0（全文见 licenses/Apache-2.0.txt）
+   来源：https://github.com/k2-fsa/sherpa-onnx
+   本产品对自托管副本的修改：关闭 phonemize 路径（usePhonemize=false），
+   使其不加载 espeak-ng / piper-phonemize。修改点记录于 docs/engine-switch-notes.md。
+
+2. onnxruntime-web（推理运行时）
+   Copyright Microsoft Corporation
+   许可证：MIT（全文见 licenses/MIT.txt）
+   来源：https://github.com/microsoft/onnxruntime
+
+3. vits-zh-aishell3 语音模型（含 vits-aishell3.int8.onnx、lexicon.txt、
+   tokens.txt、rule.far、*.fst 文本前端文件）
+   许可证：Apache License 2.0（全文见 licenses/Apache-2.0.txt）
+   训练数据集：AISHELL-3（OpenSLR SLR93）— Apache License 2.0
+   来源：https://huggingface.co/csukuangfj/vits-zh-aishell3
+   本地副本校验值见 models/sherpa-zh/MANIFEST.json
+
+Apache-2.0 与 MIT 为宽松许可证：允许商用与再分发，条件是保留本 NOTICE、
+许可证全文与版权声明。Apache-2.0 组件若有修改，须标注修改（见上第 1 条）。
+
+================================================================================
+可选 TTS 引擎档（Piper + zh_CN-huayan）—— 含 GPL-3.0 组件与许可限制
+================================================================================
+
+  ⚠️ 本档不是默认档。仅当用户主动执行 scripts/fetch-tts-assets.mjs
+     并在设置中启用时才会下载/加载以下文件。
+
+4. espeak-ng 与 espeak-ng-data（音素化，已编译链接进 piper_phonemize.wasm）
+   Copyright espeak-ng contributors
+   许可证：GPL-3.0-or-later（全文见 licenses/GPL-3.0.txt）
+
+5. piper-phonemize / piper_phonemize.wasm / piper_phonemize.data
+   许可证：MIT 本体 + GPL-3.0（链接 espeak-ng，按 GPL 分发整个二进制）
+
+6. @diffusionstudio/piper-wasm（浏览器封装）
+   许可证：MIT（声明）+ 内嵌 GPL 组件（见 4/5）
+
+7. rhasspy/piper 音色 zh_CN-huayan-medium / x_low
+   许可证：MODEL_CARD 声明 "License: Unknown"；
+   medium 档微调自 lessac（Blizzard 2013，明确排除商业用途）。
+   ⚠️ 不可商用；上游数据仓库已 404。详见 THIRD_PARTY_LICENSES.md §3.3。
+
+  分发含上述 4–6 的文件时，必须随附：
+    (a) 本 NOTICE 与 licenses/GPL-3.0.txt 全文；
+    (b) 对应源码（espeak-ng、piper-phonemize 及构建脚本），或三年有效书面要约；
+    (c) 对自托管副本的修改标注。
+  完整义务清单见 THIRD_PARTY_LICENSES.md §3.2 与 §5。
+
+================================================================================
+其他
+================================================================================
+
+8. 音色模型自定义导入功能加载的用户自备 .onnx 文件：
+   由用户提供并仅存于用户本机浏览器缓存，本产品不分发，不承担其许可责任。
+   用户须自行确认所选模型授权允许其用途（UI 已提示）。
+
+9. 本产品不含任何其他第三方素材（图标为自绘 SVG，字体使用系统字体栈，
+   无外链 CDN、无 Google Fonts、无统计/跟踪脚本）。
