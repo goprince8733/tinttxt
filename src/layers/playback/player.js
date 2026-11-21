@@ -752,7 +752,12 @@ export function createPlayer(deps) {
     }
 
     // 统一走 seekToSentence（与 nextSentence/prevSentence 同一路径——用户实测这条能工作）
-    // 不再单独走 currentChunk/ensureChunk 分支（曾导致暂停后播放卡死）
+    // 但先检查：audio 还在播就直接续播（不 seek）——避免息屏恢复后从句头重播
+    if (activeEl && !activeEl.paused && activeEl.currentTime > 0 && currentChunk && currentChunk.status === 'ready' && currentChunk.url) {
+      setStatus('playing');
+      void prefetch();
+      return;
+    }
     const idx = chunkBounds.length ? chunkOfSentence(state.sentenceIndex) : 0;
     seekToSentence(state.sentenceIndex, { play: true }).catch((e) => {
       if (e && e.name === 'AbortError') return;
@@ -1094,8 +1099,19 @@ export function createPlayer(deps) {
         sessionAbort = new AbortController();
         return;
       }
-      // 页面重新可见时，若想播但元素已暂停（被系统打断），恢复播放
-      if (wantPlaying && activeEl.paused && state.status !== 'error') {
+      // 亮屏：同步 UI 状态到实际播放位置（息屏期间 advanceChunk 可能推了 sentenceIndex）
+      if (activeEl && !activeEl.paused && currentChunk && currentChunk.status === 'ready' && currentChunk.url) {
+        const t = activeEl.currentTime;
+        const sid = currentSentenceInChunk(currentChunk, t);
+        if (sid !== state.sentenceIndex && sentences[sid]) {
+          const s = sentences[sid];
+          state.sentenceIndex = sid;
+          state.charOffset = s.start;
+          bus.emit(Events.SENTENCE, { sentence: s });
+          onStatePatch?.({ sentenceIndex: sid, charOffset: s.start });
+        }
+        if (wantPlaying && state.status !== 'playing') setStatus('playing');
+      } else if (wantPlaying && activeEl.paused && state.status !== 'error') {
         void activeEl.play().catch(() => {});
       }
       // 恢复预取（hidden 时中止了）
