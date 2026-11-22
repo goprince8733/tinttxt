@@ -495,6 +495,10 @@ export function createPlayer(deps) {
   function attachListeners(el) {
     el.ontimeupdate = () => {
       if (el !== activeEl || !currentChunk) return;
+      // 守卫一：等待新块合成/加载期间，旧音频的进度不能改写用户刚选的句子
+      if (state.status === 'loading') return;
+      // 守卫二：目标块尚未接管播放（currentChunk 还是旧块）时同样不算数
+      if (currentChunk.index !== state.chunkIndex) return;
       const t = el.currentTime;
       const sid = currentSentenceInChunk(currentChunk, t);
       if (sid !== state.sentenceIndex) {
@@ -967,11 +971,19 @@ export function createPlayer(deps) {
     }
 
     // 该块已在合成中（如开书预热）：直接等它，避免取消后从头再合成一遍
+    const gen = seekGen;
     const pending = inflight.get(targetChunk);
     if (pending) {
       setStatus('loading');
+      // 必须先停掉旧音频：否则旧块继续播放，它的 timeupdate 会用旧时间轴
+      // 反复把 sentenceIndex 写回旧值（表现为「点下一句没反应」）。
+      try { activeEl.pause(); } catch { /* ignore */ }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+      }
       pending.promise.then((chunk) => {
-        if (destroy) return;
+        // 合成期间用户又点了别的句子/章节 → 放弃这次播放，否则会用旧起点覆盖用户选择
+        if (destroy || gen !== seekGen) return;
         return playChunk(chunk, { startSentence: clamped, autoplay: wantPlaying || opts.play === true });
       }).then(() => {
         if (!destroy) void prefetch();
@@ -993,7 +1005,8 @@ export function createPlayer(deps) {
     setStatus('loading');
     // 关键：不 await！合成在后台跑，用户随时可以再点按钮打断
     ensureChunk(targetChunk).then((chunk) => {
-      if (destroy) return;
+      // 同 pending 分支：用户已改主意就不要用旧起点播放
+      if (destroy || gen !== seekGen) return;
       return playChunk(chunk, { startSentence: clamped, autoplay: wantPlaying || opts.play === true });
     }).then(() => {
       if (!destroy) void prefetch();

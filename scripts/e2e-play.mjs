@@ -252,8 +252,16 @@ async function main() {
   const beforeJump = await evalJs('window.__TINTTXT__.app.player.getState().sentenceIndex');
   await evalJs('window.__TINTTXT__.app.player.nextSentence()');
   await sleep(600);
-  const afterJump = await evalJs('window.__TINTTXT__.app.player.getState().sentenceIndex');
-  check('下一句跳转', afterJump === beforeJump + 1, `${beforeJump}→${afterJump}`);
+  const jumpInfo = await evalJs(`JSON.stringify({
+    after: window.__TINTTXT__.app.player.getState().sentenceIndex,
+    total: window.__TINTTXT__.app.player.getSentences().length,
+    status: window.__TINTTXT__.app.player.getState().status,
+    chunk: window.__TINTTXT__.app.player._diag().chunkIndex,
+    chunkTotal: window.__TINTTXT__.app.player._diag().chunkTotal,
+    inflight: window.__TINTTXT__.app.player._diag().inflight,
+  })`);
+  const afterJump = JSON.parse(jumpInfo).after;
+  check('下一句跳转', afterJump === beforeJump + 1, `${beforeJump}→${afterJump} ${jumpInfo}`);
 
   // 跳到第 3 章（验证多章 seek 正确，此前 bug 会 clamp 回第 1 章）
   const jump = await evalJs(`(async () => {
