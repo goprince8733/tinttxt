@@ -383,45 +383,18 @@ export function createSettings(ctx) {
     }
   });
 
-  /* 云端 TTS：必须隐私确认 + 必须先配置端点（否则开启即报错） */
+  /* 云端语音：默认启用（本站已内置 /api/tts），关闭即切回本地语音 */
   const cloudEndpointRow = $('#cloud-endpoint-row');
   const cloudEndpointInput = $('#cloud-endpoint');
 
   chkCloud.addEventListener('change', () => {
     if (chkCloud.checked) {
       void (async () => {
-        const ans = await ctx.modal.confirm({
-          title: '开启云端 TTS？',
-          message: '开启后每段文本将发送到你配置的云端服务器，本地模型则完全离线。确认开启？',
-          confirmLabel: '确认开启',
-          cancelLabel: '保持关闭',
-        });
-        if (ans !== 'confirm') {
-          chkCloud.checked = false; // 未确认 → 保持关闭
-          cloudNote.hidden = true;
-          return;
-        }
-        // 端点缺失时要求填写，取消则不启用（避免开启即报错）
-        let endpoint = (cloudEndpointInput.value || '').trim();
-        if (!endpoint) {
-          endpoint = (await ctx.modal.prompt({
-            title: '配置云端 TTS 端点',
-            message: '请输入接受 POST JSON 并返回音频的接口地址：',
-            placeholder: 'https://your-server.example.com/tts',
-            confirmLabel: '保存并开启',
-          }) || '').trim();
-        }
-        if (!endpoint) {
-          chkCloud.checked = false;
-          cloudNote.hidden = true;
-          ctx.toast('未填写端点，云端 TTS 保持关闭', 'warn');
-          return;
-        }
-        cloudEndpointInput.value = endpoint;
-        await app.updateSettings({ cloudEndpoint: endpoint, cloudTtsEnabled: true });
+        // 端点留空 = 使用本站内置 /api/tts，无需用户填写
+        await app.updateSettings({ cloudTtsEnabled: true });
         cloudNote.hidden = false;
-        cloudEndpointRow.hidden = false;
-        ctx.toast('云端 TTS 已开启', 'warn');
+        if (cloudEndpointRow) cloudEndpointRow.hidden = false;
+        ctx.toast('云端语音已开启（百度真人音色）', 'success');
         ctx.onVoicesChanged();
       })();
     } else {

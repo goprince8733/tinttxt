@@ -38,6 +38,16 @@ export function createCloudTtsAdapter(config) {
     async synthesize(text, opts = {}) {
       throwIfAborted(opts.signal);
       if (!config.endpoint) throw new Error('云端 TTS 未启用');
+      // 每次合成只上报一次失败（避免 catch 与新抛点重复计数导致"一次失败即回落"）
+      let failureReported = false;
+      const fail = (e) => {
+        e.cloudFailure = true;
+        if (!failureReported) {
+          failureReported = true;
+          config.onFailure?.(e);
+        }
+        return e;
+      };
       try {
         const res = await fetch(config.endpoint, {
           method: 'POST',
@@ -55,30 +65,26 @@ export function createCloudTtsAdapter(config) {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          const e = new Error(err.error || `云端 TTS HTTP ${res.status}`);
-          config.onFailure?.(e);
+          const e = fail(new Error(err.error || `云端 TTS HTTP ${res.status}`));
+          e.httpStatus = res.status;
           throw e;
         }
         // 防呆：端点未部署/被 SPA 兜底时可能返回 HTML——绝不能当音频播放
         const ctype = res.headers.get('content-type') || '';
         if (!/^audio\//i.test(ctype) && !/^application\/octet-stream/i.test(ctype)) {
-          const e = new Error(`云端返回非音频内容（${ctype || '未知类型'}）`);
-          config.onFailure?.(e);
-          throw e;
+          throw fail(new Error(`云端返回非音频内容（${ctype || '未知类型'}）`));
         }
         const blob = await res.blob();
         throwIfAborted(opts.signal);
         if (!blob || blob.size < 100) {
-          const e = new Error('云端返回音频为空');
-          config.onFailure?.(e);
-          throw e;
+          throw fail(new Error('云端返回音频为空'));
         }
         config.onSuccess?.();
         return { blob, mime: blob.type || 'audio/wav', durationSeconds: 0, chars: text.length };
       } catch (e) {
-        // 主动中止不算失败（用户切块/暂停）
+        // 主动中止不算失败（用户切块/暂停/离开页面）
         if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e;
-        if (!(e && /云端/.test(e.message || ''))) config.onFailure?.(e);
+        if (!e.cloudFailure) fail(e); // 网络异常等未归类错误
         throw e;
       }
     },

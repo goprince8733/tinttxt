@@ -39,17 +39,32 @@ export async function createApp() {
   // 本地开发服务器没有该接口 → localhost 下默认不用云端（除非显式配置端点）
   const isLocalHost = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i.test(location.hostname);
   const defaultCloudEndpoint = (typeof location !== 'undefined' && !isLocalHost) ? `${location.origin}/api/tts` : '';
-  /** 连续云端失败次数：≥2 则本次会话临时回落本地（网络/额度异常时保命） */
+  /** 连续云端失败次数：≥2 则临时回落本地；60 秒后自动重试云端 */
   let cloudFailStreak = 0;
   let cloudFallbackNotified = false;
+  let cloudRetryTimer = 0;
+  const resetCloudHealth = () => {
+    if (cloudRetryTimer) { clearTimeout(cloudRetryTimer); cloudRetryTimer = 0; }
+    cloudFailStreak = 0;
+    cloudFallbackNotified = false;
+  };
   const cloudConfig = {
     endpoint: settings.cloudEndpoint || defaultCloudEndpoint,
-    onSuccess: () => { cloudFailStreak = 0; },
-    onFailure: () => {
+    onSuccess: () => { cloudFailStreak = 0; cloudFallbackNotified = false; },
+    onFailure: (e) => {
       cloudFailStreak += 1;
-      if (cloudFailStreak >= 2 && !cloudFallbackNotified) {
+      if (cloudFailStreak < 2) return;
+      if (!cloudFallbackNotified) {
         cloudFallbackNotified = true;
-        bus.emit(Events.TOAST, { message: '云端语音连续失败，已临时改用本地语音（恢复网络后刷新页面可再试）', level: 'warn' });
+        const why = e && e.message ? `（${e.message}）` : '';
+        bus.emit(Events.TOAST, {
+          message: `云端语音暂不可用${why}，已临时改用本地语音，1 分钟后自动重试`,
+          level: 'warn',
+        });
+      }
+      // 不永久降级：60 秒后自动再试云端（网络恢复即自动切回真人音色）
+      if (!cloudRetryTimer) {
+        cloudRetryTimer = setTimeout(() => { cloudRetryTimer = 0; cloudFailStreak = 0; cloudFallbackNotified = false; }, 60000);
       }
     },
   };
@@ -273,11 +288,11 @@ export async function createApp() {
       if (st.volume != null && st.volume !== settings.volume) player.setVolume(st.volume);
     }
     if (settings.wakelockEnabled && document.visibilityState === 'visible') void wakeLock.request();
-    // 自动下载语音模型（规则：不要让用户手动下载）——开书即触发，后台静默下载
-    if (!autoDownloadStarted && modelState.status === 'idle') {
-      autoDownloadStarted = true;
-      void resolveAdapter(); // 触发自动下载（resolveAdapter 内部会启动 downloadModel）
-    }
+    // 开书即预热：云端引擎后台合成首块（点播放几乎立刻出声）；本地引擎由 resolveAdapter 触发后台下载/预热
+    void (async () => {
+      const ad = await resolveAdapter().catch(() => null);
+      if (ad && ad.id === 'cloud-http') player.warmCurrentChunk();
+    })();
     diag.start();
     return { book, state: st };
   }
@@ -458,10 +473,16 @@ export async function createApp() {
       bus.emit(Events.STATE, { model: { ...modelState } });
     }
     // 端点留空 → 回落到同域默认端点（不要清空，否则云端静默失效）
-    if (patch.cloudEndpoint !== undefined) cloudConfig.endpoint = patch.cloudEndpoint || defaultCloudEndpoint;
+    if (patch.cloudEndpoint !== undefined) {
+      cloudConfig.endpoint = patch.cloudEndpoint || defaultCloudEndpoint;
+      resetCloudHealth();
+      player.invalidateAudio();
+      await resolveAdapter();
+    }
     if (patch.cloudTtsEnabled !== undefined) {
+      if (settings.cloudTtsEnabled) resetCloudHealth(); // 重新开启 → 清掉失败计数再试
       if (settings.cloudTtsEnabled && !cloudConfig.endpoint) {
-        bus.emit(Events.TOAST, { message: '云端 TTS 已开启但未配置端点，暂用本地朗读', level: 'warn' });
+        bus.emit(Events.TOAST, { message: '未找到云端语音端点，暂用本地朗读', level: 'warn' });
       }
       player.invalidateAudio();
       await resolveAdapter();

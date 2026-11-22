@@ -55,21 +55,35 @@ function withCors(res, cors) {
 
 async function getJson(env, key) {
   if (!env.DATA) return null;
-  const raw = await env.DATA.get(key);
+  const raw = await env.DATA.get(key).catch(() => null);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 }
 
 async function putJson(env, key, value) {
+  await safePut(env, key, JSON.stringify(value));
+}
+
+/**
+ * KV 写入（尽力而为）。
+ * Cloudflare KV 对「同一 key」限制 1 次写入/秒，并发请求会返回 429：
+ * 记账失败绝不能把合成请求打成 500（宁可少记一笔，也要让用户听到声音）。
+ */
+async function safePut(env, key, value) {
   if (!env.DATA) return;
-  await env.DATA.put(key, JSON.stringify(value));
+  try {
+    await env.DATA.put(key, value);
+  } catch (e) {
+    // 429/网络抖动：忽略，下个请求会以较新读数继续累计
+  }
 }
 
 async function bump(env, key, by = 0) {
   if (!env.DATA) return by;
-  const cur = Number((await env.DATA.get(key)) || 0);
+  let cur = 0;
+  try { cur = Number((await env.DATA.get(key)) || 0); } catch { /* ignore */ }
   const next = cur + by;
-  await env.DATA.put(key, String(next));
+  await safePut(env, key, String(next));
   return next;
 }
 
@@ -105,13 +119,13 @@ async function handleTts(request, env, { trial = false } = {}) {
   // 限流（先写计数，失败也占次数）
   const ip = (request.headers.get('cf-connecting-ip') || '0.0.0.0').slice(0, 40);
   const rateKey = `rate:${ip}:${minuteKey(now)}`;
-  const rateUsed = env.DATA ? Number((await env.DATA.get(rateKey)) || 0) : 0;
+  const rateUsed = env.DATA ? Number((await env.DATA.get(rateKey).catch(() => 0)) || 0) : 0;
   if (!allowByRate(rateUsed, limits)) return json({ error: '请求过于频繁' }, 429);
-  if (env.DATA) await env.DATA.put(rateKey, String(rateUsed + 1));
+  await safePut(env, rateKey, String(rateUsed + 1));
 
   // 日预算熔断
   const day = dayKey(now);
-  const budgetUsed = env.DATA ? Number((await env.DATA.get(`budget:${day}`)) || 0) : 0;
+  const budgetUsed = env.DATA ? Number((await env.DATA.get(`budget:${day}`).catch(() => 0)) || 0) : 0;
   const circuit = checkCircuit(budgetUsed, limits);
   if (circuit.open) return json({ error: '今日云端额度已用完' }, 503);
 
@@ -124,11 +138,11 @@ async function handleTts(request, env, { trial = false } = {}) {
     quota = applyCharQuota(usedBefore, chars, dailyLimit);
     if (!quota.allowed) return json({ error: '今日额度已用完' }, 402, quotaHeaders(quota, circuit));
   } else if (trial) {
-    const usedSentences = env.DATA ? Number((await env.DATA.get(`trial:${device}:${day}`)) || 0) : 0;
+    const usedSentences = env.DATA ? Number((await env.DATA.get(`trial:${device}:${day}`).catch(() => 0)) || 0) : 0;
     if (usedSentences >= limits.trialPerDevicePerDay) return json({ error: '免费试听今天已用完' }, 402);
     quota = applyCharQuota(0, 0, limits.freeCharsPerDay);
   } else {
-    const usedBefore = env.DATA ? Number((await env.DATA.get(`free:${device}:${day}`)) || 0) : 0;
+    const usedBefore = env.DATA ? Number((await env.DATA.get(`free:${device}:${day}`).catch(() => 0)) || 0) : 0;
     quota = applyCharQuota(usedBefore, chars, limits.freeCharsPerDay);
     if (!quota.allowed) return json({ error: '今日免费额度已用完' }, 402, quotaHeaders(quota, circuit));
   }
@@ -144,7 +158,7 @@ async function handleTts(request, env, { trial = false } = {}) {
   // 落账
   if (trial) await bump(env, `trial:${device}:${day}`, 1);
   if (pass) { pass.day[day] = Number(pass.day[day] || 0) + chars; await putJson(env, `pass:${auth}`, pass); }
-  else if (!trial && env.DATA) await env.DATA.put(`free:${device}:${day}`, String(quota.used));
+  else if (!trial) await safePut(env, `free:${device}:${day}`, String(quota.used));
   await bump(env, `budget:${day}`, chars);
 
   const headers = quotaHeaders(quota, checkCircuit(budgetUsed + chars, limits));

@@ -221,7 +221,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   ttsEngine: 'local-sherpa', // v3 默认：吐字清晰（真机 A/B 实测 Piper 发音不可懂）
   settingsVersion: SETTINGS_VERSION,
   sherpaTier: 'int8',        // int8 ~39MB（默认）/ full ~121MB
-  chunkSeconds: 100, // 约 1 分 40 秒，落在 1–3 分钟硬性区间内
+  chunkSeconds: 30, // 单块目标时长（秒）；播放器另把「首块」压到 8 秒内以便秒出声
   prefetchDepth: 2,
   modelTier: 'medium', // Piper 档（仅 ttsEngine='local-piper' 时生效）：63.2MB；x_low 20.6MB 省流
   wakelockEnabled: true,

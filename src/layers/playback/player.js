@@ -94,7 +94,17 @@ export function createPlayer(deps) {
   // 规则2：预取深度（句）：播当前句时合成后续 3~5 句
   let prefetchDepth = settings.prefetchDepth ?? 3;
   /** 播放块目标时长（秒）：首块 3~8 秒先出声（规则2），块小→首声快。 */
-  let chunkSeconds = settings.chunkSeconds ?? 8;
+  // 块大小上限 30 秒：块越大首块合成越久（云端每句 1~3 秒），也越难在块的播放时长内预取完下一块。
+  // 老存档里的 100 秒也夹到 30，避免"点播放要等半分钟"。
+  let chunkSeconds = Math.min(Number(settings.chunkSeconds) || 30, 30);
+  /**
+   * 当前合成引擎 ID：参与音频缓存键。
+   * 必须区分引擎——云端（百度）与本地（sherpa/piper）音色完全不同的声音，
+   * 若共用同一缓存键，切换引擎后会播出上一个引擎的音频（人声对不上）。
+   */
+  let activeEngineId = '';
+  /** 引擎作用域下的缓存音色键。 */
+  const cacheVoiceKey = () => `${activeEngineId || 'unknown'}:${state.voice || 'default'}`;
   // 注：chunkSeconds 在上方声明（规则2：首块 3~8 秒）
 
   /** 当前正在播放的块 */
@@ -147,6 +157,17 @@ export function createPlayer(deps) {
   /* ---------------- 分块 ---------------- */
 
   /** 把句子按目标时长（秒）打包成块边界。 */
+  /**
+   * 块时长爬坡：8s → 15s → chunkSeconds。
+   * 云端每句合成 1~3 秒（并发 2），而每句音频约 3 秒：
+   * 首块必须极短才能秒出声；第二块也要短，否则「正在合成下一块」赶不上上一块播完。
+   */
+  const CHUNK_LADDER = [8, 15];
+  function limitForChunk(chunkIdx) {
+    const base = chunkIdx < CHUNK_LADDER.length ? CHUNK_LADDER[chunkIdx] : chunkSeconds;
+    return Math.min(base, chunkSeconds);
+  }
+
   function planChunks() {
     /** @type {Array<{start:number,end:number}>} */
     const bounds = [];
@@ -159,14 +180,15 @@ export function createPlayer(deps) {
         continue;
       }
       const dur = (s.speak.length || s.raw.length) / (CHARS_PER_SEC * state.rate);
-      if (est > 0 && est + dur > chunkSeconds) {
+      const limit = limitForChunk(bounds.length);
+      if (est > 0 && est + dur > limit) {
         bounds.push({ start, end: i });
         start = i;
         est = 0;
       }
       est += dur;
       // 单句超长强制独立成块
-      if (dur > chunkSeconds * 1.5) {
+      if (dur > limit * 1.5) {
         bounds.push({ start: i, end: i + 1 });
         start = i + 1;
         est = 0;
@@ -248,15 +270,66 @@ export function createPlayer(deps) {
 
     try {
       const adapter = await getAdapter();
+      activeEngineId = adapter.id || activeEngineId;
       const parts = [];
       const ids = [];
+      if (adapter.requiresNetwork) {
+        // 云端引擎：按句并发合成（串行每句 2~4 秒，首块要 10 秒以上）。
+        // 并发 2：足够把首块压到 ~4 秒，又不至于撞厂商 QPS 限制。
+        const CONCURRENCY = 2;
+        const bufByIndex = new Map();
+        const targets = [];
+        for (let i = bound.start; i < bound.end; i++) {
+          const s = sentences[i];
+          if (s.skippable || !s.speak) continue;
+          const cachedBlob = await getAudio(s.speak, cacheVoiceKey(), state.rate);
+          if (cachedBlob && cachedBlob.size > 44) bufByIndex.set(i, await cachedBlob.arrayBuffer());
+          else targets.push(i);
+        }
+        let previewAt = -1;
+        let previewRes = null;
+        let cursor = 0;
+        const worker = async () => {
+          for (;;) {
+            const k = cursor++;
+            if (k >= targets.length) return;
+            const i = targets[k];
+            throwIfAborted(controller.signal);
+            const res = await adapter.synthesize(sentences[i].speak, {
+              voice: state.voice || undefined,
+              rate: state.rate,
+              signal: controller.signal,
+            });
+            if (res.preview) { previewAt = i; previewRes = res; return; }
+            bufByIndex.set(i, await res.blob.arrayBuffer());
+            void putAudio(sentences[i].speak, cacheVoiceKey(), state.rate, res.blob).then(() => evictLru());
+          }
+        };
+        const poolSize = Math.max(1, Math.min(CONCURRENCY, targets.length));
+        await Promise.all(Array.from({ length: poolSize }, () => worker()));
+        throwIfAborted(controller.signal);
+        if (previewRes) {
+          chunk.status = 'ready';
+          chunk.blob = null;
+          chunk.durationSec = previewRes.durationSeconds;
+          chunk.timeline = [{ sentenceIndex: previewAt, startSec: 0, endSec: Infinity }];
+          chunk.preview = true;
+          chunk.previewText = sentences.slice(bound.start, bound.end).map((x) => x.speak).join(' ');
+          return chunk;
+        }
+        // 按句序组装（并发完成顺序不定，时间轴必须与句子顺序一致）
+        for (let i = bound.start; i < bound.end; i++) {
+          const buf = bufByIndex.get(i);
+          if (buf) { parts.push(buf); ids.push(i); }
+        }
+      } else
       for (let i = bound.start; i < bound.end; i++) {
         throwIfAborted(controller.signal);
         const s = sentences[i];
         if (s.skippable || !s.speak) continue;
 
         // 规则1+4：按句缓存（键=md5(text+voice+rate)），命中直接取 Blob 跳过合成
-        const cachedBlob = await getAudio(s.speak, state.voice || null, state.rate);
+        const cachedBlob = await getAudio(s.speak, cacheVoiceKey(), state.rate);
         if (cachedBlob && cachedBlob.size > 44) {
           const buf = await cachedBlob.arrayBuffer();
           parts.push(buf);
@@ -283,7 +356,7 @@ export function createPlayer(deps) {
         parts.push(buf);
         ids.push(i);
         // 写入按句缓存（规则1+4）：下次回退/重听/跳章直接命中
-        void putAudio(s.speak, state.voice || null, state.rate, res.blob).then(() => evictLru());
+        void putAudio(s.speak, cacheVoiceKey(), state.rate, res.blob).then(() => evictLru());
         // 句间强制让出主线程（宏任务）：合成是同步 wasm —— Piper ~0.5s/句、sherpa 更久，
         // 整块连续合成会把点击/渲染饿死（实测主线程单次连卡 14–18s，即「死机感」来源）。
         // 每句后让一次，单次阻塞上限 = 一句话的合成时长。
@@ -373,6 +446,19 @@ export function createPlayer(deps) {
         chunkCache.delete(k);
       }
     }
+  }
+
+  /**
+   * 预合成「当前块」（开书后后台跑）。
+   * 云端引擎每次合成 2~4 秒，开书即预热可让用户点播放时几乎立刻出声。
+   * 仅在当前适配器能产出真实音频时调用（preview 块无缓存价值，会污染块缓存）。
+   */
+  function warmCurrentChunk() {
+    if (destroy || !sentences.length || !chunkBounds.length) return;
+    const idx = chunkOfSentence(state.sentenceIndex);
+    const cached = chunkCache.get(idx);
+    if (cached && cached.status === 'ready') return;
+    void ensureChunk(idx).catch(() => {});
   }
 
   async function prefetch() {
@@ -716,8 +802,9 @@ export function createPlayer(deps) {
     wantPlaying = true;
     setStatus('loading');
 
-    // 取消可能卡住的旧合成（与 seekToSentence 一致）——否则 ensureChunk 返回卡住的旧 Promise
-    cancelAll();
+    // 取消可能卡住的旧合成 —— 但若目标块正在合成（开书预热），必须复用它，不能取消重来
+    const pendingIdx = chunkBounds.length ? chunkOfSentence(state.sentenceIndex) : 0;
+    if (!inflight.has(pendingIdx)) cancelAll();
 
     // 关键：在 await 之前同步调 speechSynthesis（360Browser 需要用户手势上下文）。
     // 用静音预热（volume=0）激活语音引擎，真正的朗读由 previewSpeak/<audio> 接管——
@@ -871,6 +958,23 @@ export function createPlayer(deps) {
         }
         return;
       }
+    }
+
+    // 该块已在合成中（如开书预热）：直接等它，避免取消后从头再合成一遍
+    const pending = inflight.get(targetChunk);
+    if (pending) {
+      setStatus('loading');
+      pending.promise.then((chunk) => {
+        if (destroy) return;
+        return playChunk(chunk, { startSentence: clamped, autoplay: wantPlaying || opts.play === true });
+      }).then(() => {
+        if (!destroy) void prefetch();
+      }).catch((e) => {
+        if (e && e.name === 'AbortError') return;
+        setStatus('error', `跳转失败: ${e.message}`);
+        bus.emit(Events.ERROR, { message: e.message, recoverable: true });
+      });
+      return;
     }
 
     // 跨块：取消旧合成 → 立即返回 → 新合成后台跑（用户可继续操作）
@@ -1155,6 +1259,7 @@ export function createPlayer(deps) {
     seekToSentence,
     seekToCharOffset,
     seekRelative,
+    warmCurrentChunk,
     invalidateAudio,
     setRate,
     setVoice,

@@ -301,7 +301,12 @@ export function createPlayerView(ctx) {
       const sent = player.getSentences();
       const cur = sent[st.sentenceIndex];
       const hint = cur ? `「${cur.raw.slice(0, 15)}…」` : '';
-      badge.textContent = `🎙️ 正在合成语音…${hint}（约 10~30 秒，请耐心等待，不是故障）`;
+      const engineId = app && app.registry && app.registry.active ? app.registry.active.id : '';
+      // 云端 1~5 秒；本地 wasm 合成慢很多，明确告知"不是故障"
+      const eta = engineId === 'cloud-http'
+        ? '约 3~8 秒'
+        : '约 10~30 秒，请耐心等待，不是故障';
+      badge.textContent = `🎙️ 正在合成语音…${hint}（${eta}）`;
     } else {
       badge.textContent = STATUS_TEXT[key];
     }

@@ -21,10 +21,15 @@ const MAX_ENTRIES = 2000;
 
 /** @type {IDBDatabase|null} */
 let dbPromise = null;
+/** 已尝试过一次「删库重建」（防止异常库导致无限重试）。 */
+let repairTried = false;
+/** 缓存临时不可用截止时间：失败后 60 秒内直接跳过，避免每句都等超时拖慢合成。 */
+let cacheDisabledUntil = 0;
 
 function openDb() {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
+  if (cacheDisabledUntil > Date.now()) return Promise.reject(new Error('音频缓存临时不可用'));
+  const raw = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -33,11 +38,37 @@ function openDb() {
         s.createIndex('lastUsed', 'lastUsed', { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // 库存在但缺表（历史版本/外部写入造成的异常库）：删库重建一次
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        try { db.close(); } catch { /* ignore */ }
+        dbPromise = null;
+        if (repairTried) { reject(new Error('音频缓存库缺少对象仓库')); return; }
+        repairTried = true;
+        const del = indexedDB.deleteDatabase(DB_NAME);
+        const retry = () => { dbPromise = null; resolve(openDb()); };
+        del.onsuccess = retry;
+        del.onerror = retry;
+        // 其他标签页/连接持有旧库时删库会 blocked —— 不能干等，直接放弃修复
+        del.onblocked = () => reject(new Error('音频缓存库被占用，暂不使用缓存'));
+        return;
+      }
+      resolve(db);
+    };
     req.onerror = () => {
       dbPromise = null;
       reject(req.error);
     };
+  });
+  // 打开/删库可能被其他连接阻塞：4 秒超时后退化为「不缓存」，绝不拖死播放
+  dbPromise = Promise.race([
+    raw,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('音频缓存打开超时')), 4000)),
+  ]).catch((e) => {
+    dbPromise = null;
+    cacheDisabledUntil = Date.now() + 60000; // 60 秒内不再尝试，避免逐句等待超时
+    throw e;
   });
   return dbPromise;
 }
@@ -80,11 +111,19 @@ export async function getAudio(text, voiceId, rate) {
   try {
     const key = await cacheKey(text, voiceId, rate);
     const db = await openDb();
-    return new Promise((resolve) => {
+    // 注意：必须 await —— 事务创建可能同步抛错（库缺表），否则会绕过 catch 把播放打挂
+    return await new Promise((resolve) => {
       let settled = false;
       const done = (v) => { if (!settled) { settled = true; resolve(v); } };
       const timer = setTimeout(() => done(null), 3000);
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      let tx;
+      try {
+        tx = db.transaction(STORE_NAME, 'readwrite');
+      } catch {
+        clearTimeout(timer);
+        done(null);
+        return;
+      }
       const req = tx.objectStore(STORE_NAME).get(key);
       req.onsuccess = () => {
         clearTimeout(timer);
@@ -96,7 +135,7 @@ export async function getAudio(text, voiceId, rate) {
       req.onerror = () => { clearTimeout(timer); done(null); };
     });
   } catch {
-    return null; // 隐私模式/crypto 不可用时退化为不缓存
+    return null; // 隐私模式/crypto 不可用/库异常时退化为不缓存
   }
 }
 
@@ -110,8 +149,14 @@ export async function putAudio(text, voiceId, rate, blob) {
   try {
     const key = await cacheKey(text, voiceId, rate);
     const db = await openDb();
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+    await new Promise((resolve) => {
+      let tx;
+      try {
+        tx = db.transaction(STORE_NAME, 'readwrite');
+      } catch {
+        resolve(); // 库异常：放弃写入，不影响播放
+        return;
+      }
       tx.objectStore(STORE_NAME).put({
         key,
         blob,
@@ -120,9 +165,10 @@ export async function putAudio(text, voiceId, rate, blob) {
       });
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
     });
   } catch {
-    /* ignore */
+    /* ignore：缓存是优化，不是播放前提 */
   }
 }
 
@@ -133,8 +179,14 @@ export async function putAudio(text, voiceId, rate, blob) {
 export async function evictLru() {
   try {
     const db = await openDb();
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+    return await new Promise((resolve) => {
+      let tx;
+      try {
+        tx = db.transaction(STORE_NAME, 'readwrite');
+      } catch {
+        resolve(0);
+        return;
+      }
       const store = tx.objectStore(STORE_NAME);
       const countReq = store.count();
       countReq.onsuccess = () => {
@@ -174,11 +226,18 @@ export async function evictLru() {
 export async function clearAudioCache() {
   try {
     const db = await openDb();
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+    await new Promise((resolve) => {
+      let tx;
+      try {
+        tx = db.transaction(STORE_NAME, 'readwrite');
+      } catch {
+        resolve();
+        return;
+      }
       tx.objectStore(STORE_NAME).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
+      tx.onabort = () => resolve();
     });
   } catch {
     /* ignore */
@@ -192,8 +251,14 @@ export async function clearAudioCache() {
 export async function audioCacheStats() {
   try {
     const db = await openDb();
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
+    return await new Promise((resolve) => {
+      let tx;
+      try {
+        tx = db.transaction(STORE_NAME, 'readonly');
+      } catch {
+        resolve({ count: 0, totalBytes: 0 });
+        return;
+      }
       const store = tx.objectStore(STORE_NAME);
       const countReq = store.count();
       let totalBytes = 0;
