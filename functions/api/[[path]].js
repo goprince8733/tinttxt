@@ -55,29 +55,82 @@ function withCors(res, cors) {
   return out;
 }
 
+/* ---------------- 轻量存储层（Cache API + 进程内内存） ----------------
+ * 为什么不直接用 KV：Cloudflare KV 免费额度每天只有「1000 次写」，
+ * 而我们每合成一句就要写 3~4 次（限流/设备额度/全局预算），听一小时就爆，
+ * 触发 429 后 API 会整体降级。计数器属于"近似值即可"的数据，
+ * 放进 Cache API（不占 KV 配额）+ 进程内内存（隔离实例内强一致）完全够用。
+ * KV 只保留"旧数据只读兜底"，基本不再写。
+ */
+const memStore = new Map(); // key -> { v: string, exp: number }
+const CACHE_ORIGIN = 'https://kv-internal.tinttxt.invalid/';
+const cacheApi = (() => {
+  try { return typeof caches !== 'undefined' && caches.default ? caches.default : null; } catch { return null; }
+})();
+const urlFor = (key) => CACHE_ORIGIN + encodeURIComponent(key);
+
+/** get/put/delete 的存储门面，接口与 KV 兼容（provider 可无缝使用）。 */
+const store = {
+  async get(key) {
+    const m = memStore.get(key);
+    if (m) {
+      if (m.exp > Date.now()) return m.v;
+      memStore.delete(key);
+    }
+    if (cacheApi) {
+      try {
+        const r = await cacheApi.match(urlFor(key));
+        if (r) {
+          const text = await r.text();
+          const ttl = Number((r.headers.get('cache-control') || '').match(/max-age=(\d+)/)?.[1] || 300);
+          memStore.set(key, { v: text, exp: Date.now() + ttl * 1000 });
+          return text;
+        }
+      } catch { /* ignore */ }
+    }
+    // 不再回读 KV：KV 免费额度每天只有 1000 次写，读也会加速耗尽；
+    // 计数器是"近似即可"的数据，丢了最多让某人当天多用几句，不影响正确性。
+    return null;
+  },
+  async put(key, value, opts) {
+    const ttl = (opts && opts.expirationTtl) || 600;
+    memStore.set(key, { v: value, exp: Date.now() + ttl * 1000 });
+    if (cacheApi) {
+      try {
+        await cacheApi.put(urlFor(key), new Response(value, {
+          headers: { 'cache-control': `max-age=${ttl}`, 'content-type': 'text/plain; charset=utf-8' },
+        }));
+      } catch { /* ignore */ }
+    }
+  },
+  async delete(key) {
+    memStore.delete(key);
+    if (cacheApi) {
+      try { await cacheApi.delete(urlFor(key)); } catch { /* ignore */ }
+    }
+  },
+};
+
+/** 兼容旧调用点：返回存储门面（不再依赖 request 级 env）。 */
+function bindEnv(env) {
+  return store;
+}
+
 async function getJson(env, key) {
-  if (!env.DATA) return null;
-  const raw = await env.DATA.get(key).catch(() => null);
+  const raw = await bindEnv(env).get(key);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 }
 
 async function putJson(env, key, value, ttlSeconds) {
-  await safePut(env, key, JSON.stringify(value), ttlSeconds);
+  await bindEnv(env).put(key, JSON.stringify(value), ttlSeconds ? { expirationTtl: ttlSeconds } : undefined);
 }
 
-/**
- * KV 写入（尽力而为）。
- * Cloudflare KV 对「同一 key」限制 1 次写入/秒，并发请求会返回 429：
- * 记账失败绝不能把合成请求打成 500（宁可少记一笔，也要让用户听到声音）。
- */
+/** 写入（尽力而为）：任何存储异常都不能让合成请求失败。 */
 async function safePut(env, key, value, ttlSeconds) {
-  if (!env.DATA) return;
   try {
-    await env.DATA.put(key, value, ttlSeconds ? { expirationTtl: ttlSeconds } : undefined);
-  } catch (e) {
-    // 429/网络抖动：忽略，下个请求会以较新读数继续累计
-  }
+    await bindEnv(env).put(key, String(value), ttlSeconds ? { expirationTtl: ttlSeconds } : undefined);
+  } catch { /* ignore */ }
 }
 
 const TTL = Object.freeze({
@@ -87,11 +140,10 @@ const TTL = Object.freeze({
 });
 
 async function bump(env, key, by = 0, ttlSeconds) {
-  if (!env.DATA) return by;
   let cur = 0;
-  try { cur = Number((await env.DATA.get(key)) || 0); } catch { /* ignore */ }
+  try { cur = Number((await bindEnv(env).get(key)) || 0); } catch { /* ignore */ }
   const next = cur + by;
-  await safePut(env, key, String(next), ttlSeconds);
+  await safePut(env, key, next, ttlSeconds);
   return next;
 }
 
@@ -134,13 +186,13 @@ async function handleTts(request, env, { trial = false } = {}) {
   // 限流（先写计数，失败也占次数）
   const ip = (request.headers.get('cf-connecting-ip') || '0.0.0.0').slice(0, 40);
   const rateKey = `rate:${ip}:${minuteKey(now)}`;
-  const rateUsed = env.DATA ? Number((await env.DATA.get(rateKey).catch(() => 0)) || 0) : 0;
+  const rateUsed = Number((await bindEnv(env).get(rateKey)) || 0);
   if (!allowByRate(rateUsed, limits)) return json({ error: '请求过于频繁' }, 429);
   await safePut(env, rateKey, String(rateUsed + 1), TTL.rate);
 
   // 日预算熔断
   const day = dayKey(now);
-  const budgetUsed = env.DATA ? Number((await env.DATA.get(`budget:${day}`).catch(() => 0)) || 0) : 0;
+  const budgetUsed = Number((await bindEnv(env).get(`budget:${day}`)) || 0);
   const circuit = checkCircuit(budgetUsed, limits);
   if (circuit.open) return json({ error: '今日云端额度已用完' }, 503);
 
@@ -153,11 +205,11 @@ async function handleTts(request, env, { trial = false } = {}) {
     quota = applyCharQuota(usedBefore, chars, dailyLimit);
     if (!quota.allowed) return json({ error: '今日额度已用完' }, 402, quotaHeaders(quota, circuit));
   } else if (trial) {
-    const usedSentences = env.DATA ? Number((await env.DATA.get(`trial:${device}:${day}`).catch(() => 0)) || 0) : 0;
+    const usedSentences = Number((await bindEnv(env).get(`trial:${device}:${day}`)) || 0);
     if (usedSentences >= limits.trialPerDevicePerDay) return json({ error: '免费试听今天已用完' }, 402);
     quota = applyCharQuota(0, 0, limits.freeCharsPerDay);
   } else {
-    const usedBefore = env.DATA ? Number((await env.DATA.get(`free:${device}:${day}`).catch(() => 0)) || 0) : 0;
+    const usedBefore = Number((await bindEnv(env).get(`free:${device}:${day}`)) || 0);
     quota = applyCharQuota(usedBefore, chars, limits.freeCharsPerDay);
     if (!quota.allowed) return json({ error: '今日免费额度已用完' }, 402, quotaHeaders(quota, circuit));
   }
@@ -165,7 +217,8 @@ async function handleTts(request, env, { trial = false } = {}) {
   // 合成
   let out;
   try {
-    out = await provider.synthesize({ text: body.text, voice: body.voice, rate: Number(body.rate) || 1, env });
+    // provider 也走同一存储（token 缓存），不再写 KV
+    out = await provider.synthesize({ text: body.text, voice: body.voice, rate: Number(body.rate) || 1, env: { ...env, KV_STORE: bindEnv(env) } });
   } catch (e) {
     return json({ error: `合成失败：${(e && e.message) || e}` }, 502);
   }

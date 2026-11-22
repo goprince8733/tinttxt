@@ -58,14 +58,14 @@ function timeoutSignal(ms) {
 
 /** 清除缓存的 token（token 失效时调用，避免 25 天内一直用坏 token）。 */
 async function clearToken(env) {
-  const KV = env.DATA;
+  const KV = env.KV_STORE || env.DATA;
   if (!KV) return;
   try { await KV.delete('baidu:token'); } catch { /* ignore */ }
 }
 
 /** 获取 access_token（缓存在 KV，25 天过期自动刷新；无 KV 时每次实时获取）。 */
 async function getToken(env) {
-  const KV = env.DATA;
+  const KV = env.KV_STORE || env.DATA;
   // 尝试从缓存读取
   if (KV) {
     try {
