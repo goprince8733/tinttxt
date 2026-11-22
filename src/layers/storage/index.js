@@ -216,8 +216,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   normalizeNumbers: true,
   dialogueVoice: false,
   dialogueVoiceId: null,
-  cloudTtsEnabled: false,
-  cloudEndpoint: '', // 云端 TTS 端点（留空时云端开关无法生效）
+  cloudTtsEnabled: true, // 默认启用云端（百度真人音色）；显式关闭则回落本地
+  cloudEndpoint: '', // 留空 → 自动使用同域 /api/tts（Pages Functions）
   ttsEngine: 'local-sherpa', // v3 默认：吐字清晰（真机 A/B 实测 Piper 发音不可懂）
   settingsVersion: SETTINGS_VERSION,
   sherpaTier: 'int8',        // int8 ~39MB（默认）/ full ~121MB

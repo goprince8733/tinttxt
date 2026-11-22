@@ -35,7 +35,24 @@ export async function createApp() {
   const localAdapter = createLocalPiperAdapter();   // 可选：含 espeak-ng GPL 与 huayan 许可限制
   const previewAdapter = createSpeechPreviewAdapter();
   // 云端适配器持有可变配置对象：端点存于 settings.cloudEndpoint，随时可改
-  const cloudConfig = { endpoint: settings.cloudEndpoint || '' };
+  // 云端 TTS 端点：默认用当前域名的 /api/tts（Pages Functions，国内可达）
+  // 本地开发服务器没有该接口 → localhost 下默认不用云端（除非显式配置端点）
+  const isLocalHost = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i.test(location.hostname);
+  const defaultCloudEndpoint = (typeof location !== 'undefined' && !isLocalHost) ? `${location.origin}/api/tts` : '';
+  /** 连续云端失败次数：≥2 则本次会话临时回落本地（网络/额度异常时保命） */
+  let cloudFailStreak = 0;
+  let cloudFallbackNotified = false;
+  const cloudConfig = {
+    endpoint: settings.cloudEndpoint || defaultCloudEndpoint,
+    onSuccess: () => { cloudFailStreak = 0; },
+    onFailure: () => {
+      cloudFailStreak += 1;
+      if (cloudFailStreak >= 2 && !cloudFallbackNotified) {
+        cloudFallbackNotified = true;
+        bus.emit(Events.TOAST, { message: '云端语音连续失败，已临时改用本地语音（恢复网络后刷新页面可再试）', level: 'warn' });
+      }
+    },
+  };
   const cloudAdapter = createCloudTtsAdapter(cloudConfig);
   registry.register(sherpaAdapter); // 必须先于 localAdapter（首个注册即默认 active）
   registry.register(localAdapter);
@@ -44,8 +61,8 @@ export async function createApp() {
 
   /** 模型未就绪或引擎未预热时，即时兜底 speech-preview（<1秒出声），同时后台下载/预热。 */
   async function resolveAdapter() {
-    // 云端需「显式开关 + 已配置端点」同时满足，否则回落本地（避免开启即报错）
-    if (settings.cloudTtsEnabled && cloudConfig.endpoint) {
+    // 云端 TTS 优先（真人音色 + 秒级合成）；显式关闭或连续失败才回落本地
+    if (settings.cloudTtsEnabled !== false && cloudConfig.endpoint && cloudFailStreak < 2) {
       registry.setActive('cloud-http');
       return registry.active;
     }
@@ -440,7 +457,8 @@ export async function createApp() {
       await checkModel().catch(() => {});
       bus.emit(Events.STATE, { model: { ...modelState } });
     }
-    if (patch.cloudEndpoint !== undefined) cloudConfig.endpoint = patch.cloudEndpoint || '';
+    // 端点留空 → 回落到同域默认端点（不要清空，否则云端静默失效）
+    if (patch.cloudEndpoint !== undefined) cloudConfig.endpoint = patch.cloudEndpoint || defaultCloudEndpoint;
     if (patch.cloudTtsEnabled !== undefined) {
       if (settings.cloudTtsEnabled && !cloudConfig.endpoint) {
         bus.emit(Events.TOAST, { message: '云端 TTS 已开启但未配置端点，暂用本地朗读', level: 'warn' });
@@ -708,6 +726,7 @@ export async function createApp() {
     wakeLock,
     diag,
     registry,
+    resolveAdapter,
     // 导入/书架
     importFiles,
     openBook,

@@ -294,8 +294,15 @@ async function deploy(creds) {
     throw new Error(`创建 Pages 项目失败（exit ${created.code}）：\n${created.out}`);
   }
 
-  // 5.2 上传 dist/
+  // 5.2 上传 dist/（含 Pages Functions：复制 functions/ → dist/functions/）
   log(`上传 dist/ → ${PROJECT} …`);
+  const fnsSrc = path.join(ROOT, 'functions');
+  const fnsDst = path.join(DIST, 'functions');
+  if (fs.existsSync(fnsSrc)) {
+    await fsp.rm(fnsDst, { recursive: true, force: true });
+    await fsp.cp(fnsSrc, fnsDst, { recursive: true });
+    log('已复制 functions/ → dist/functions/（Pages Functions 云端 TTS API）');
+  }
   const up = await wr(['pages', 'deploy', DIST, '--project-name', PROJECT, '--branch', 'main', '--commit-dirty=true']);
   if (up.code !== 0) throw new Error(`部署失败（exit ${up.code}）`);
 

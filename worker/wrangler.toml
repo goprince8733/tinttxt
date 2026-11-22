@@ -8,13 +8,13 @@ compatibility_date = "2026-11-01"
 # （scripts/deploy-worker.mjs 会自动创建并回填）
 [[kv_namespaces]]
 binding = "DATA"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "891a51a856a34c758ce429df77ea607b"
 
 [vars]
 # CORS 白名单（逗号分隔）
 ALLOWED_ORIGINS = "https://tinttxt.pages.dev,http://127.0.0.1:8123,http://localhost:8123"
-# mock = 无 key 联调；key 到手后改 "volcano"
-TTS_PROVIDER = "mock"
+# baidu = 百度语音合成（主力）；mock = 无 key 联调
+TTS_PROVIDER = "baidu"
 # 限额（quota.js DEFAULT_LIMITS 可被这些环境变量覆盖）
 FREE_CHARS_PER_DAY = "3600"
 TRIAL_PER_DEVICE_PER_DAY = "3"
@@ -23,4 +23,4 @@ MAX_CHARS_PER_REQUEST = "500"
 PER_IP_PER_MINUTE = "10"
 DAILY_BUDGET_CHARS = "500000"
 
-# 密钥不进仓库：npx wrangler secret put VOLC_TTS_TOKEN
+# 密钥不进仓库：npx wrangler secret put BAIDU_API_KEY / BAIDU_SECRET_KEY

@@ -1,11 +1,25 @@
 /**
- * 播放层 —— 云端 TTS 适配器（可选，默认关闭）
- * 硬约束：必须显式开关；文本上云前由 UI 层弹隐私提示确认。
- * 本适配器只负责把已确认的文本发往用户配置的 HTTP 端点。
+ * 播放层 —— 云端 TTS 适配器（百度语音合成）
+ * API：POST /api/tts {text, voice, rate} → WAV 音频
+ * 认证：X-Device-Id（免费档）或 Bearer token（通行证）
  * @module playback/tts/cloud
  */
 
 import { throwIfAborted, abortError } from './index.js';
+
+/** 获取设备 ID（localStorage 持久化）。 */
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem('tinttxt-device-id');
+    if (!id) {
+      id = 'dev-' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+      localStorage.setItem('tinttxt-device-id', id);
+    }
+    return id;
+  } catch {
+    return 'dev-anonymous';
+  }
+}
 
 /**
  * @param {{endpoint: string, apiKey?: string}} config
@@ -14,7 +28,7 @@ import { throwIfAborted, abortError } from './index.js';
 export function createCloudTtsAdapter(config) {
   return {
     id: 'cloud-http',
-    label: '云端合成（需手动开启）',
+    label: '云端合成（百度语音）',
     requiresNetwork: true,
 
     async prepare() {
@@ -24,29 +38,67 @@ export function createCloudTtsAdapter(config) {
     async synthesize(text, opts = {}) {
       throwIfAborted(opts.signal);
       if (!config.endpoint) throw new Error('云端 TTS 未启用');
-      const res = await fetch(config.endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          text,
-          voice: opts.voice || 'default',
-          rate: opts.rate || 1,
-          format: 'wav',
-        }),
-        signal: opts.signal,
-      });
-      if (!res.ok) throw new Error(`云端 TTS HTTP ${res.status}`);
-      const blob = await res.blob();
-      throwIfAborted(opts.signal);
-      const mime = blob.type || 'audio/wav';
-      return { blob, mime, durationSeconds: 0, chars: text.length };
+      try {
+        const res = await fetch(config.endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-device-id': getDeviceId(),
+            ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            text,
+            voice: opts.voice || '0',
+            rate: opts.rate || 1,
+          }),
+          signal: opts.signal,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          const e = new Error(err.error || `云端 TTS HTTP ${res.status}`);
+          config.onFailure?.(e);
+          throw e;
+        }
+        // 防呆：端点未部署/被 SPA 兜底时可能返回 HTML——绝不能当音频播放
+        const ctype = res.headers.get('content-type') || '';
+        if (!/^audio\//i.test(ctype) && !/^application\/octet-stream/i.test(ctype)) {
+          const e = new Error(`云端返回非音频内容（${ctype || '未知类型'}）`);
+          config.onFailure?.(e);
+          throw e;
+        }
+        const blob = await res.blob();
+        throwIfAborted(opts.signal);
+        if (!blob || blob.size < 100) {
+          const e = new Error('云端返回音频为空');
+          config.onFailure?.(e);
+          throw e;
+        }
+        config.onSuccess?.();
+        return { blob, mime: blob.type || 'audio/wav', durationSeconds: 0, chars: text.length };
+      } catch (e) {
+        // 主动中止不算失败（用户切块/暂停）
+        if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) throw e;
+        if (!(e && /云端/.test(e.message || ''))) config.onFailure?.(e);
+        throw e;
+      }
     },
 
     async listVoices() {
-      return [{ id: 'cloud-default', label: '云端默认音色', kind: 'cloud', dialogueCapable: false }];
+      try {
+        const base = config.endpoint ? config.endpoint.replace(/\/api\/tts$/, '/api/voices') : '';
+        if (!base) return [];
+        const res = await fetch(base);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return (data.voices || []).map((v) => ({
+          id: v.id,
+          label: v.label,
+          kind: 'cloud',
+          dialogueCapable: false,
+        }));
+      } catch {
+        return [];
+      }
     },
 
     async isReady() {
