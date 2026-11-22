@@ -66,6 +66,11 @@ export function createPlayerView(ctx) {
   let lastProgAt = 0;         // 上次程序化滚动的发起时间
   let resumeTimer = 0;
   let lastScrollTop = 0;      // 用于区分"用户滑动"与"句子渲染引起的微小位移"
+  /**
+   * 重渲染（换章/换书）会清空正文，浏览器会把 scrollTop 归零 —— 这是一次大位移，
+   * 若不忽略就会被判定成"用户手动滑动"，换章后跟随会莫名暂停 8 秒。
+   */
+  let ignoreScrollUntil = 0;
   let activeSpan = null;
   /** 手动滑动后自动恢复跟随的等待时长 */
   const FOLLOW_RESUME_MS = 8000;
@@ -164,6 +169,8 @@ export function createPlayerView(ctx) {
 
   function renderChapter(chIdx) {
     const book = ctx.currentBook;
+    // 清空正文会把 scrollTop 归零（一次大位移）：标记为"忽略"，别误判成用户滑动
+    ignoreScrollUntil = Date.now() + 600;
     clear(readerContent);
     clearSpans();
     renderedChIdx = chIdx;
@@ -315,7 +322,14 @@ export function createPlayerView(ctx) {
     if (!followHint) return;
     const show = followOn && manualPaused;
     followHint.hidden = !show;
-    followHint.classList.toggle('counting', show);
+    if (!show) {
+      followHint.classList.remove('counting');
+      return;
+    }
+    // 重新触发 CSS 动画：用户持续滑动时计时会被重置，进度线也必须从头走
+    followHint.classList.remove('counting');
+    void followHint.offsetWidth;
+    followHint.classList.add('counting');
   }
 
   /** 恢复跟随（点提示 / 点句子 / 重新勾选） */
@@ -326,13 +340,15 @@ export function createPlayerView(ctx) {
     maybeScrollToActive();
   }
 
-  /** 软暂停：提示可点，8 秒无操作自动恢复 */
+  /** 软暂停：提示可点，8 秒无操作自动恢复（仅在播放中才自动恢复，暂停时浏览不打扰） */
   function pauseFollow() {
     if (!followOn) return;
     manualPaused = true;
     updateFollowHint();
     clearTimeout(resumeTimer);
-    resumeTimer = setTimeout(resumeFollow, FOLLOW_RESUME_MS);
+    const st = player.getState();
+    const playing = st.status === 'playing' || st.status === 'loading' || st.status === 'buffering';
+    if (playing) resumeTimer = setTimeout(resumeFollow, FOLLOW_RESUME_MS);
   }
 
   readerScroll.addEventListener('scroll', () => {
@@ -340,6 +356,8 @@ export function createPlayerView(ctx) {
     const top = readerScroll.scrollTop;
     const delta = Math.abs(top - lastScrollTop);
     lastScrollTop = top;
+    // 重渲染导致的归零/大位移：不算用户操作
+    if (Date.now() < ignoreScrollUntil) return;
     // 自己滚的：目标位置已到（±8px）或刚发起 250ms 内 → 不算手动
     if (progTop != null && (Math.abs(top - progTop) < 8 || Date.now() - lastProgAt < 250)) return;
     if (Date.now() - lastProgAt < 250) return;
@@ -770,6 +788,8 @@ export function createPlayerView(ctx) {
     if (st.status === 'playing' || st.status === 'loading' || st.status === 'buffering') {
       player.pause();
     } else {
+      // 用户点播放 = 想继续听当前位置，恢复跟随（否则暂停期间滑动过会一直不跟）
+      resumeFollow();
       // 立即变暂停图标（不等异步状态事件）
       const use = btnPlay.querySelector('use');
       if (use) use.setAttribute('href', '#ic-pause');
