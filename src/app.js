@@ -496,8 +496,12 @@ export async function createApp() {
       // 引擎切换：重置下载状态、作废旧音频块并重新解析适配器
       modelState.status = 'idle';
       player.invalidateAudio();
-      // cloudTtsEnabled 与 ttsEngine 保持单一事实来源（老 UI/老存档仍可能只改这个）
-      settings.cloudTtsEnabled = patch.ttsEngine === 'cloud';
+      // cloudTtsEnabled 与 ttsEngine 保持单一事实来源：必须落盘，
+      // 只改内存的话刷新后会不一致（曾导致百度音色分组被误判为未开启而整组消失）。
+      if (settings.cloudTtsEnabled !== (patch.ttsEngine === 'cloud')) {
+        settings = await store.saveSettings({ cloudTtsEnabled: patch.ttsEngine === 'cloud' });
+        bus.emit(Events.SETTINGS, settings);
+      }
       if (patch.ttsEngine === 'cloud' || prev.ttsEngine === 'cloud') resetCloudHealth();
       // 音色 ID 跨引擎不互通（百度 per / 系统 voiceURI / 本地音色）→ 清空为默认
       if (settings.voice) {

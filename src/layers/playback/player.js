@@ -660,47 +660,107 @@ export function createPlayer(deps) {
     }
   }
 
+  /**
+   * 系统语音朗读（默认引擎）。
+   * 关键：**逐句朗读**，而不是整块一次性念完——
+   * 否则高亮不会逐句推进、暂停/跳句的粒度也变成"一整块"（用户会觉得不受控）。
+   */
   function previewSpeak(chunk) {
-    if (typeof window === 'undefined' || !window.speechSynthesis) {
-      setStatus('error', '当前浏览器不支持预览朗读');
+    const inChunk = state.sentenceIndex >= chunk.sentenceStart && state.sentenceIndex < chunk.sentenceEnd;
+    return previewSpeakFrom(chunk, inChunk ? state.sentenceIndex : chunk.sentenceStart);
+  }
+
+  /** 系统语音会话代号：暂停/跳句/切块都会 +1，作废旧 utterance 的回调。 */
+  let previewGen = 0;
+
+  function previewSpeakFrom(chunk, startIdx) {
+    if (typeof window === 'undefined' || !window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') {
+      setStatus('error', '当前浏览器不支持系统语音');
       return;
     }
-    const u = new SpeechSynthesisUtterance(chunk.previewText || '');
-    u.lang = 'zh-CN';
-    u.rate = state.rate;
-    u.volume = state.volume;
-    // 预览档也要真正应用所选音色（voice 为 speechSynthesis 的 voiceURI）
-    if (state.voice && typeof window.speechSynthesis.getVoices === 'function') {
-      const v = window.speechSynthesis.getVoices().find((x) => x.voiceURI === state.voice);
-      if (v) {
-        u.voice = v;
-        if (v.lang) u.lang = v.lang;
+    const gen = ++previewGen;
+    let i = Math.max(chunk.sentenceStart, Math.min(startIdx, chunk.sentenceEnd - 1));
+
+    const stopIfStale = () => destroy || gen !== previewGen || !wantPlaying;
+
+    const speakNext = () => {
+      if (stopIfStale()) {
+        if (!wantPlaying && !destroy) setStatus('paused');
+        return;
       }
-    }
-    u.onend = () => {
-      if (wantPlaying && !destroy) void advanceChunk();
-    };
-    u.onerror = () => {
-      if (wantPlaying && !destroy) void advanceChunk();
-    };
-    // 直接 speak（不检查 speaking 状态——cancel 后标志可能卡住导致永远不播）
-    // 浏览器会自动排队：如果手势预热语音还在说，本句排在后面
-    try {
-      window.speechSynthesis.speak(u);
-      setStatus('playing');
-    } catch (e) {
-      // 某些浏览器 cancel 后 speak 抛异常 → 重置后再试一次
+      // 跳过不可朗读的句子（纯标点/分隔行）
+      while (i < chunk.sentenceEnd) {
+        const s = sentences[i];
+        if (s && s.speak && !s.skippable) break;
+        i += 1;
+      }
+      if (i >= chunk.sentenceEnd) { void advanceChunk(); return; }
+
+      const s = sentences[i];
+      // 逐句高亮 + 进度落盘（系统语音没有 <audio> 时间轴，只能在这里推进）
+      if (state.sentenceIndex !== i) {
+        state.sentenceIndex = i;
+        state.charOffset = s.start;
+        bus.emit(Events.SENTENCE, { sentence: s });
+        persistProgress();
+        onStatePatch?.({ sentenceIndex: i, charOffset: s.start });
+      }
+
+      const u = new SpeechSynthesisUtterance(s.speak);
+      u.lang = 'zh-CN';
+      u.rate = state.rate;
+      u.volume = state.volume;
+      if (state.voice && typeof window.speechSynthesis.getVoices === 'function') {
+        const v = window.speechSynthesis.getVoices().find((x) => x.voiceURI === state.voice);
+        if (v) {
+          u.voice = v;
+          if (v.lang) u.lang = v.lang;
+        }
+      }
+
+      let spoke = false;
+      const watchdog = setTimeout(() => {
+        if (gen !== previewGen || spoke) return;
+        // 2 秒还没开始出声：多半是系统没有中文语音包/被系统静音 → 明确告知而不是假装在播
+        setStatus('error', '系统语音没有出声：可能是手机缺少中文语音包，或该浏览器不支持。可在「语音来源」里切到百度语音。');
+        bus.emit(Events.ERROR, {
+          message: '系统语音未出声，请检查手机语音设置，或切换到百度语音',
+          recoverable: true,
+        });
+        wantPlaying = false;
+      }, 2000);
+
+      u.onstart = () => { spoke = true; clearTimeout(watchdog); };
+      u.onend = () => {
+        clearTimeout(watchdog);
+        if (gen !== previewGen || destroy) return;
+        i += 1;
+        if (wantPlaying) speakNext();
+        else setStatus('paused');
+      };
+      u.onerror = () => {
+        clearTimeout(watchdog);
+        if (gen !== previewGen || destroy) return;
+        i += 1; // 单句失败不卡死，继续下一句
+        if (wantPlaying) speakNext();
+      };
+
       try {
-        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+        setStatus('playing');
+      } catch {
+        clearTimeout(watchdog);
+        // 某些浏览器 cancel 后立刻 speak 会抛：清空队列后重试一次
+        try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
         setTimeout(() => {
-          if (destroy || !wantPlaying) return; // 用户已暂停/销毁 → 不重启语音
+          if (gen !== previewGen || destroy || !wantPlaying) return;
           try { window.speechSynthesis.speak(u); } catch { /* ignore */ }
         }, 200);
         setStatus('playing');
-      } catch {
-        setStatus('error', `系统语音启动失败：${(e && e.message) || e}`);
       }
-    }
+    };
+
+    speakNext();
   }
 
   /* ---------------- Media Session ---------------- */
@@ -768,6 +828,7 @@ export function createPlayer(deps) {
   /* ---------------- 对外控制 ---------------- */
 
   async function loadBook(book, opts = {}) {
+    previewGen += 1; // 换书：作废旧书的系统语音逐句回调（否则旧书会继续念）
     // 取消旧任务，防串音（含预览档的 speechSynthesis——否则旧书朗读会继续出声）
     cancelAll();
     if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
@@ -910,6 +971,7 @@ export function createPlayer(deps) {
 
   function pause() {
     wantPlaying = false;
+    previewGen += 1; // 作废系统语音的逐句回调（否则暂停后仍会念下一句）
     // 暂停即中止在途合成：否则整块剩余句子仍会继续向云端要音频（白烧额度/流量/电），
     // 已合成的句子都在缓存里，重新播放时不会重合成。
     cancelAll();
@@ -937,6 +999,7 @@ export function createPlayer(deps) {
 
   async function stop() {
     wantPlaying = false;
+    previewGen += 1;
     cancelAll();
     activeEl.pause();
     // 规则5：单元素
@@ -971,34 +1034,8 @@ export function createPlayer(deps) {
       // preview 块没有 <audio> 源——必须走 previewSpeak 而非 activeEl.play()
       if (currentChunk.preview) {
         if (wantPlaying && opts.play !== false) {
-          // preview 块内跳句：只说目标句到块尾（不是整块重播）
-          const speakParts = [];
-          for (let i = clamped; i < currentChunk.sentenceEnd; i++) {
-            const si = sentences[i];
-            if (si && si.speak && !si.skippable) speakParts.push(si.speak);
-          }
-          const speakText = speakParts.join(' ') || currentChunk.previewText || '';
-          if (speakText) {
-            const u = new SpeechSynthesisUtterance(speakText);
-            u.lang = 'zh-CN';
-            u.rate = state.rate;
-            u.volume = state.volume;
-            u.onend = () => {
-              // 同块内跳句：说完就停，不自动跳下一块
-              if (wantPlaying && !destroy) setStatus('paused');
-            };
-            u.onerror = () => {
-              if (wantPlaying && !destroy) setStatus('paused');
-            };
-            try {
-              // 先取消旧句：否则旧句会先念完再念新句（高亮已跳、声音滞后）
-              window.speechSynthesis.cancel();
-              window.speechSynthesis.speak(u);
-              setStatus('playing');
-            } catch {
-              setStatus('error', '系统语音启动失败');
-            }
-          }
+          // 统一走逐句朗读：从目标句开始，后续逐句推进高亮（不再整块一次性念完）
+          previewSpeakFrom(currentChunk, clamped);
         } else {
           setStatus('paused');
         }
@@ -1229,6 +1266,7 @@ export function createPlayer(deps) {
    * 保持当前位置与播放意图，从当前句按新引擎重新合成。
    */
   function invalidateAudio() {
+    previewGen += 1;
     cancelAll();
     if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
     const resume = wantPlaying;

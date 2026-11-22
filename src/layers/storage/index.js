@@ -242,8 +242,10 @@ export async function getSettings() {
   // 这是一次性重置：用户随时可在阅读页「语音来源」里切回百度或本地。
   if (raw && (raw.settingsVersion == null || raw.settingsVersion < SETTINGS_VERSION)) {
     merged.ttsEngine = 'system';
-    merged.cloudTtsEnabled = false;
     merged.settingsVersion = SETTINGS_VERSION;
+    // 只在迁移时清一次遗留音色 ID（百度 per / 本地音色在系统语音里找不到）；
+    // 不能每次启动都清，否则用户选的系统发音人无法持久保存。
+    merged.voice = null;
     const t2 = db.transaction('settings', 'readwrite');
     t2.objectStore('settings').put({ key: 'app', value: merged });
     await new Promise((res, rej) => {
@@ -252,6 +254,9 @@ export async function getSettings() {
       t2.onabort = () => rej(t2.error);
     });
   }
+  // 单一事实来源：cloudTtsEnabled 永远由 ttsEngine 推导（历史存档/旧开关可能不一致，
+  // 不一致会让「百度语音」的音色分组被误判为未开启而整组消失）。
+  merged.cloudTtsEnabled = merged.ttsEngine === 'cloud';
   return merged;
 }
 

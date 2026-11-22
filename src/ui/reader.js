@@ -653,8 +653,8 @@ export function createPlayerView(ctx) {
             dialogueCapable: false,
           }];
         }
-      } else if (adapter.id === 'cloud-http' && !settings.cloudTtsEnabled) {
-        continue; // 云端未开启时不展示其音色
+      } else if (adapter.id === 'cloud-http' && settings.ttsEngine !== 'cloud') {
+        continue; // 不是百度引擎时不展示其音色（以 ttsEngine 为准，cloudTtsEnabled 只是镜像）
       } else {
         try {
           voices = await adapter.listVoices();
