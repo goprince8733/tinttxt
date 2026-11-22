@@ -599,6 +599,17 @@ export function createPlayer(deps) {
       activeEl.pause();
     }
     currentChunk = chunk;
+    // 块切换：先结算上一块"应有 vs 实际"朗读时长（能直接暴露引擎内部丢内容）
+    if (chunkStat.idx >= 0 && chunkStat.idx !== chunk.index) {
+      trace({
+        kind: 'chunkStat',
+        idx: chunkStat.idx,
+        expected: Math.round(chunkStat.expected),
+        spoken: Math.round(chunkStat.spoken),
+        ratio: chunkStat.expected > 0 ? Number((chunkStat.spoken / chunkStat.expected).toFixed(2)) : null,
+      });
+    }
+    chunkStat = { idx: chunk.index, expected: 0, spoken: 0 };
     // 块切换必须记在最前面：系统语音（preview）在下面会提前 return，
     // 原来把日志放在后面导致"跳块"恰恰没被记录（诊断失效）。
     trace({ kind: 'chunk', idx: chunk.index, preview: !!chunk.preview, from: opts.startSentence != null ? opts.startSentence : null, chunkStart: chunk.sentenceStart, chunkEnd: chunk.sentenceEnd });
@@ -743,6 +754,30 @@ export function createPlayer(deps) {
       if (traceLog.length > 200) traceLog.shift();
     } catch { /* ignore */ }
   }
+  /** 上一句结束时间（算句间空隙，判断是否"听起来跳了"）。 */
+  let lastSpeakEndAt = 0;
+  /**
+   * 每块累计「应有朗读时长 vs 实际朗读时长」。
+   * 作用：即使每句都报"正常结束"，只要整块实际时长远短于应有，
+   * 就说明引擎内部丢了内容 → 记 chunkStat 供定位。
+   */
+  let chunkStat = { idx: -1, expected: 0, spoken: 0 };
+  /**
+   * 自适应语速（字/秒）：用实际完成的句子反推，代替写死的 4.5。
+   * 为什么：不同机型/音色的真实语速差异很大（实测 4~6 字/秒），
+   * 用固定值会把"正常念完"误判成"被打断"，或反过来漏判真正的截断。
+   */
+  let speechRateCps = 4.5;
+  const rateSamples = [];
+  function noteSpeechRate(chars, ms) {
+    if (!(ms > 700) || !(chars >= 4)) return;
+    const cps = chars / (ms / 1000);
+    if (!(cps > 1.5 && cps < 12)) return;
+    rateSamples.push(cps);
+    if (rateSamples.length > 30) rateSamples.shift();
+    const sorted = rateSamples.slice().sort((a, b) => a - b);
+    speechRateCps = sorted[Math.floor(sorted.length / 2)] || 4.5;
+  }
 
   /** 系统语音会话代号：暂停/跳句/切块都会 +1，作废旧 utterance 的回调。 */
   let previewGen = 0;
@@ -805,13 +840,13 @@ export function createPlayer(deps) {
 
       let spoke = false;
       const speakT0 = Date.now();
-      const expectedMs = Math.max(500, (s.speak.length / (4.5 * (state.rate || 1))) * 1000);
+      const expectedMs = Math.max(500, (s.speak.length / (speechRateCps * (state.rate || 1))) * 1000);
       const isHidden = () => {
         try { return document.visibilityState === 'hidden'; } catch { return false; }
       };
       // 同一句的重试计数：换句就归零
       if (retryState.i !== i) { retryState.i = i; retryState.n = 0; }
-      trace({ kind: 'speak', idx: i, chars: s.speak.length, expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: retryState.n, chunk: chunk.index });
+      trace({ kind: 'speak', idx: i, chars: s.speak.length, expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: retryState.n, chunk: chunk.index, gapMs: lastSpeakEndAt ? Date.now() - lastSpeakEndAt : null });
 
       const watchdog = setTimeout(() => {
         if (gen !== previewGen || spoke) return;
@@ -844,7 +879,7 @@ export function createPlayer(deps) {
        * 旧逻辑把它当"念完了"继续 i++，就会把整块剩余句子静默跳过 → 表现成"熄屏跳过一个语音块"。
        * 现在：耗时明显短于该句应有长度 → 判定被打断 → **重念同一句**（最多 2 次）而不是推进。
        */
-      const suspiciousEnd = (elapsed) => (spoke ? elapsed < expectedMs * 0.55 : elapsed < 400);
+      const suspiciousEnd = (elapsed) => (spoke ? elapsed < expectedMs * 0.6 : elapsed < 400);
 
       const handleInterrupted = (reason, elapsed) => {
         trace({ kind: 'interrupted', idx: i, reason, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: retryState.n, chunk: chunk.index });
@@ -867,6 +902,7 @@ export function createPlayer(deps) {
           return;
         }
         trace({ kind: 'giveup', idx: i, chunk: chunk.index });
+        lastSpeakEndAt = Date.now();
         i += 1;
         if (wantPlaying) speakNext();
         else setStatus('paused');
@@ -876,8 +912,13 @@ export function createPlayer(deps) {
         clearTimeout(watchdog);
         if (gen !== previewGen || destroy) return;
         const elapsed = Date.now() - speakT0;
-        trace({ kind: 'end', idx: i, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), spoke, hidden: isHidden(), chunk: chunk.index });
+        lastSpeakEndAt = Date.now();
+        trace({ kind: 'end', idx: i, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), cps: elapsed > 300 ? Number((s.speak.length / (elapsed / 1000)).toFixed(1)) : null, spoke, hidden: isHidden(), chunk: chunk.index });
         if (suspiciousEnd(elapsed)) { handleInterrupted(spoke ? 'short-end' : 'no-start-end', elapsed); return; }
+        // 正常结束：累计本块"应有/实际"时长，并学习真实语速
+        noteSpeechRate(s.speak.length, elapsed);
+        chunkStat.expected += expectedMs;
+        chunkStat.spoken += elapsed;
         i += 1;
         if (wantPlaying) speakNext();
         else setStatus('paused');
@@ -890,6 +931,7 @@ export function createPlayer(deps) {
         trace({ kind: 'error', idx: i, error: kind, elapsed: Math.round(elapsed), hidden: isHidden(), chunk: chunk.index });
         const hard = kind === 'interrupted' || kind === 'canceled' || kind === 'audio-busy';
         if (hard || suspiciousEnd(elapsed)) { handleInterrupted(kind, elapsed); return; }
+        lastSpeakEndAt = Date.now();
         i += 1; // 真正失败的句子不卡死，继续下一句
         if (wantPlaying) speakNext();
       };
@@ -1503,11 +1545,14 @@ export function createPlayer(deps) {
     // 系统豁免的是播放本身，不是 JS 调度；不依赖后台定时器做任何调度。
     const onVisible = () => {
       if (document.visibilityState === 'hidden') {
+        // 记录可见性变化：排查"熄屏跳块"时，必须能把事件和熄屏时刻对齐
+        trace({ kind: 'vis', hidden: true, status: state.status, sentenceIndex: state.sentenceIndex, chunk: state.chunkIndex, speaking: !!(window.speechSynthesis && window.speechSynthesis.speaking) });
         // 中止在途合成（已缓存的句子不受影响）；播放由 <audio> 自行继续
         sessionAbort.abort(new DOMException('页面隐藏', 'AbortError'));
         sessionAbort = new AbortController();
         return;
       }
+      trace({ kind: 'vis', hidden: false, status: state.status, sentenceIndex: state.sentenceIndex, chunk: state.chunkIndex, speaking: !!(window.speechSynthesis && window.speechSynthesis.speaking) });
       // 亮屏：同步 UI 状态到实际播放位置（息屏期间 advanceChunk 可能推了 sentenceIndex）
       // 注意：系统语音（preview）不走 <audio>，碰 activeEl 会误触发 waiting → 状态卡在 buffering。
       const isPreviewEngine = activeEngineId === 'speech-preview';
