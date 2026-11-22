@@ -464,17 +464,6 @@
         </label>
         <p class="field-note warn-note" id="dialogue-note" hidden>当前引擎不支持对话音色，已降级忽略</p>
         <label class="switch-row">
-          <span class="switch-text">云端语音（百度真人音色·默认开启）<small>关闭后改用本地离线语音</small></span>
-          <input type="checkbox" class="switch" id="chk-cloud" />
-        </label>
-        <p class="field-note" id="cloud-note" hidden>云端语音已开启：朗读文本经本站代理发送给百度语音合成（真人音色，秒级出声，可离线缓存复用）。</p>
-        <div class="field-row" id="cloud-endpoint-row" hidden>
-          <label class="field-label" for="cloud-endpoint">云端 TTS 端点 URL（留空 = 本站 /api/tts）</label>
-          <input type="url" id="cloud-endpoint" class="input" placeholder="留空自动使用本站 /api/tts"
-                 autocomplete="off" spellcheck="false" aria-describedby="cloud-endpoint-hint" />
-          <p class="field-note" id="cloud-endpoint-hint">留空即自动使用本站内置的 /api/tts；也可填写自建接口（POST JSON text/voice/rate，返回音频）。</p>
-        </div>
-        <label class="switch-row">
           <span class="switch-text">保持亮屏（Wake Lock）</span>
           <input type="checkbox" class="switch" id="chk-wakelock" />
         </label>

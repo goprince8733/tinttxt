@@ -29,8 +29,6 @@ export function createSettings(ctx) {
   const regexResult = $('#regex-result');
   const chkDialogue = $('#chk-dialogue');
   const dialogueNote = $('#dialogue-note');
-  const chkCloud = $('#chk-cloud');
-  const cloudNote = $('#cloud-note');
   const chkWakelock = $('#chk-wakelock');
   const wakelockNote = $('#wakelock-note');
   const tierRadios = $$('input[name="model-tier"]');
@@ -239,10 +237,6 @@ export function createSettings(ctx) {
     chkSkipSep.checked = !!s.skipSeparators;
     txtRegex.value = s.chapterRegex || DEFAULT_CHAPTER_REGEX;
     chkDialogue.checked = !!s.dialogueVoice;
-    chkCloud.checked = s.ttsEngine === 'cloud';
-    cloudNote.hidden = s.ttsEngine !== 'cloud';
-    if (cloudEndpointRow) cloudEndpointRow.hidden = s.ttsEngine !== 'cloud';
-    if (cloudEndpointInput) cloudEndpointInput.value = s.cloudEndpoint || '';
 
     chkWakelock.checked = !!s.wakelockEnabled;
     if (!wakeSupported) {
@@ -427,37 +421,12 @@ export function createSettings(ctx) {
     }
   });
 
-  /* 云端语音：默认启用（本站已内置 /api/tts），关闭即切回本地语音 */
-  const cloudEndpointRow = $('#cloud-endpoint-row');
-  const cloudEndpointInput = $('#cloud-endpoint');
-
-  chkCloud.addEventListener('change', () => {
-    if (chkCloud.checked) {
-      void (async () => {
-        // 端点留空 = 使用本站内置 /api/tts，无需用户填写
-        await app.updateSettings({ cloudTtsEnabled: true });
-        cloudNote.hidden = false;
-        if (cloudEndpointRow) cloudEndpointRow.hidden = false;
-        ctx.toast('云端语音已开启（百度真人音色）', 'success');
-        ctx.onVoicesChanged();
-      })();
-    } else {
-      void (async () => {
-        await app.updateSettings({ cloudTtsEnabled: false });
-        cloudNote.hidden = true;
-        if (cloudEndpointRow) cloudEndpointRow.hidden = true;
-        ctx.toast('云端语音已关闭，恢复本地朗读', 'success');
-        ctx.onVoicesChanged();
-      })();
-    }
-  });
-
-  // 端点即时保存（仅存本机设置，不发网络）
-  cloudEndpointInput.addEventListener('change', () => {
-    const v = (cloudEndpointInput.value || '').trim();
-    void app.updateSettings({ cloudEndpoint: v });
-    if (v) ctx.toast('云端端点已保存', 'success');
-  });
+  /*
+   * 原先这里有一个「云端语音（默认开启）」开关 —— 已删除。
+   * 原因：它和上面的「TTS 引擎」单选框重复，而且"默认开启"的描述早已不成立
+   * （百度语音现在默认对所有人关闭，只有站长用专属链接解锁）。留着只会让人以为
+   * 打开开关就能用百度，实际会被服务端 403。引擎选择以单选框为唯一入口。
+   */
 
   /* TTS 引擎切换 */
   const ENGINE_LABELS = {
