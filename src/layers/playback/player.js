@@ -103,6 +103,8 @@ export function createPlayer(deps) {
    * 若共用同一缓存键，切换引擎后会播出上一个引擎的音频（人声对不上）。
    */
   let activeEngineId = '';
+  /** 用户主动定位（跳句/跳章/拖进度）的代号：块播完的自动前进不得覆盖它。 */
+  let seekGen = 0;
   /** 引擎作用域下的缓存音色键。 */
   const cacheVoiceKey = () => `${activeEngineId || 'unknown'}:${state.voice || 'default'}`;
   // 注：chunkSeconds 在上方声明（规则2：首块 3~8 秒）
@@ -545,9 +547,12 @@ export function createPlayer(deps) {
       bus.emit(Events.BOOK_END, { bookId }); // 排队播放：交给装配层续播下一本书
       return;
     }
+    // 块自然播完的"自动前进"可能和用户的下一句/跳章同时发生：合成期间用户一旦定位，
+    // 就必须放弃这次自动前进，否则会把用户选中的句子覆盖成块起点（表现为"点了没反应"）。
+    const gen = seekGen;
     try {
       const next = await ensureChunk(nextIdx);
-      if (destroy || !wantPlaying) return;
+      if (destroy || !wantPlaying || gen !== seekGen) return;
       await playChunk(next, { autoplay: true });
       void prefetch();
     } catch (e) {
@@ -898,6 +903,7 @@ export function createPlayer(deps) {
   /** 跳到指定句子。 */
   async function seekToSentence(idx, opts = {}) {
     if (!sentences.length) return;
+    seekGen++; // 用户主动定位：作废进行中的「块播完自动前进」
     const clamped = Math.max(0, Math.min(idx, sentences.length - 1));
     const s = sentences[clamped];
     const targetChunk = chunkOfSentence(clamped);

@@ -174,12 +174,20 @@ async function main() {
   const dlStart = Date.now();
   const dl = await evalJs(`(async () => {
     const app = window.__TINTTXT__.app;
-    // 超时上限防挂死：慢网也应在上限内完成，超时按失败上报，绝不无限等
-    const st = await Promise.race([
-      app.downloadModel(),
-      new Promise((r) => setTimeout(() => r({ status: 'timeout', error: 'e2e 下载超时上限 900s' }), 900000)),
-    ]);
-    return { status: st.status, error: st.error || null, tier: st.tier, engine: st.engine };
+    // 开书即自动触发下载 → 轮询到「文件就绪 + 引擎预热完成（active 切到本地 sherpa）」为止。
+    // 注意 status==='ready' 只代表文件下完，wasm 编译/模型加载还要 1~3 秒。
+    const t0 = Date.now();
+    let last = await app.checkModel();
+    while (Date.now() - t0 < 900000) {
+      await app.resolveAdapter();
+      const active = app.registry.active ? app.registry.active.id : '';
+      if (active === 'local-sherpa') break;
+      if (last.status === 'error') break;
+      void app.downloadModel().catch(() => {});
+      await new Promise((r) => setTimeout(r, 500));
+      last = await app.checkModel();
+    }
+    return { status: last.status, error: last.error || null, tier: last.tier, engine: last.engine };
   })()`);
   const dlMs = Date.now() - dlStart;
   check('模型下载成功（默认引擎 sherpa int8）', dl.status === 'ready' && dl.engine === 'local-sherpa', JSON.stringify(dl));
@@ -291,11 +299,19 @@ async function main() {
 
   // piper 下载 + 缓存 key 回归（曾用 model:/… 这类 scheme 串 key，Cache API put 抛 TypeError）
   const pdl = await evalJs(`(async () => {
-    const st = await Promise.race([
-      window.__TINTTXT__.app.downloadModel(),
-      new Promise((r) => setTimeout(() => r({ status: 'timeout', error: 'e2e piper 下载超时 900s' }), 900000)),
-    ]);
-    return { status: st.status, error: st.error || null, engine: st.engine };
+    const app = window.__TINTTXT__.app;
+    let last = await app.checkModel();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 900000) {
+      await app.resolveAdapter();
+      const active = app.registry.active ? app.registry.active.id : '';
+      if (active === 'local-piper') break;
+      if (last.status === 'error') break;
+      void app.downloadModel().catch(() => {});
+      await new Promise((r) => setTimeout(r, 500));
+      last = await app.checkModel();
+    }
+    return { status: last.status, error: last.error || null, engine: last.engine };
   })()`);
   check('piper 模型下载成功', pdl.status === 'ready' && pdl.engine === 'local-piper', JSON.stringify(pdl));
   const pkey = await evalJs(`(async () => {

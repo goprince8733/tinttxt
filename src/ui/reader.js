@@ -405,6 +405,9 @@ export function createPlayerView(ctx) {
   /**
    * @param {any} patch STATE 事件载荷（可能是全量状态、局部补丁，或 {model}/{sleep}）
    */
+  /** 上次渲染音色列表时的活跃引擎（引擎变化需重刷，否则会残留别的引擎的音色）。 */
+  let lastVoiceEngine = '';
+
   function onState(patch) {
     if (!patch) return;
     if (patch.status) setStatusUI(patch.status, patch.error);
@@ -412,6 +415,12 @@ export function createPlayerView(ctx) {
     if (patch.model) {
       updateModelBanner();
       void refreshVoices(); // 模型状态变化时刷新音色列表（去掉/加上"未下载"标签）
+    }
+    // 活跃引擎切换（云端 ↔ 本地）时刷新音色列表：不同引擎音色 ID 不通用，混在一起会「选男声出女声」
+    const engineId = app.registry && app.registry.active ? app.registry.active.id : '';
+    if (engineId && engineId !== lastVoiceEngine) {
+      lastVoiceEngine = engineId;
+      void refreshVoices();
     }
     if ('sleep' in patch) updateSleepUI(patch.sleep);
     if (patch.rate !== undefined) updateRateUI(patch.rate);
@@ -587,6 +596,8 @@ export function createPlayerView(ctx) {
 
   async function refreshVoices() {
     const settings = app.getSettings();
+    // 只展示「当前活跃引擎」的音色：音色 ID 跨引擎不通用（选了本地音色传给云端会被兜底成默认音色）
+    const activeId = app.registry && app.registry.active ? app.registry.active.id : '';
     clear(voiceSelect);
     const def = document.createElement('option');
     def.value = '';
@@ -594,6 +605,7 @@ export function createPlayerView(ctx) {
     voiceSelect.append(def);
 
     for (const adapter of app.registry.list()) {
+      if (activeId && adapter.id !== activeId) continue;
       let voices = [];
       if (adapter.id === 'local-piper') {
         // 不调用其 listVoices()：未就绪时它会触发模型下载（下拉框渲染不该下载 63MB）

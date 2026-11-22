@@ -74,35 +74,41 @@ export async function createApp() {
   registry.register(previewAdapter);
   registry.register(cloudAdapter);
 
+  /** 切换活跃引擎；引擎变化时广播一次 STATE（音色列表等 UI 需要知道引擎变了）。 */
+  function activateEngine(id) {
+    const prev = registry.active ? registry.active.id : '';
+    registry.setActive(id);
+    if (registry.active && registry.active.id !== prev) {
+      bus.emit(Events.STATE, { engine: registry.active.id });
+    }
+    return registry.active;
+  }
+
   /** 模型未就绪或引擎未预热时，即时兜底 speech-preview（<1秒出声），同时后台下载/预热。 */
   async function resolveAdapter() {
     // 云端 TTS 优先（真人音色 + 秒级合成）；显式关闭或连续失败才回落本地
     if (settings.cloudTtsEnabled !== false && cloudConfig.endpoint && cloudFailStreak < 2) {
-      registry.setActive('cloud-http');
-      return registry.active;
+      return activateEngine('cloud-http');
     }
     // 用户显式选择 Piper 档时尊重其选择
     if (settings.ttsEngine === 'local-piper') {
       const piperReady = await localAdapter.isReady().catch(() => false);
       if (piperReady || modelState.status === 'downloading') {
-        registry.setActive('local-piper');
-        return registry.active;
+        return activateEngine('local-piper');
       }
     }
     const ready = await sherpaAdapter.isReady().catch(() => false);
     const warmedUp = sherpaAdapter.isWarmedUp();
     if (ready && warmedUp) {
-      registry.setActive('local-sherpa');
-      return registry.active;
+      return activateEngine('local-sherpa');
     }
     // 正在下载中：先占位本地引擎，下载完成即就绪
     if (modelState.status === 'downloading') {
-      registry.setActive('local-sherpa');
-      return registry.active;
+      return activateEngine('local-sherpa');
     }
     // 文件已下载但引擎未预热（wasm 编译+模型加载 10~30秒）→ 即时兜底 + 后台预热
     if (ready && !warmedUp) {
-      registry.setActive('speech-preview');
+      const a = activateEngine('speech-preview');
       if (!warmupStarted) {
         warmupStarted = true;
         void sherpaAdapter.warmup().then(() => {
@@ -113,10 +119,10 @@ export async function createApp() {
           warmupStarted = false;
         });
       }
-      return registry.active;
+      return a;
     }
     // 模型未就绪且未在下载 → 即时兜底 speech-preview（<1秒出声）+ 自动后台下载
-    registry.setActive('speech-preview');
+    const active = activateEngine('speech-preview');
     if (modelState.status === 'idle' && !autoDownloadStarted) {
       autoDownloadStarted = true;
       void downloadModel().then(() => {
@@ -126,7 +132,7 @@ export async function createApp() {
         }
       });
     }
-    return registry.active;
+    return active;
   }
 
   /* ---------------- 播放器 ---------------- */
