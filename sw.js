@@ -23,7 +23,7 @@
  */
 'use strict';
 
-const CACHE_VERSION = 'tinttxt-v1'; // 升版即换缓存名
+const CACHE_VERSION = 'tinttxt-v1'; // 部署脚本每次会自动改写为构建号（见 scripts/deploy-cloudflare.mjs）
 const PRECACHE = `tinttxt-precache-${CACHE_VERSION}`;
 const RUNTIME = `tinttxt-runtime-${CACHE_VERSION}`;
 const OFFLINE_URL = '/index.html';
@@ -163,7 +163,7 @@ self.addEventListener('activate', (event) => {
       // 只有「更新安装」才通知页面有新版本（首次安装不打扰）
       if (isUpdateInstall) {
         const list = await self.clients.matchAll({ type: 'window' });
-        for (const client of list) client.postMessage({ type: 'SW_UPDATED' });
+        for (const client of list) client.postMessage({ type: 'SW_UPDATED', version: CACHE_VERSION });
       }
     })()
   );

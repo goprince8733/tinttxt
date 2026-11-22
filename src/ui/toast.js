@@ -76,8 +76,9 @@ export function createToast(ctx) {
   // 3) SW 更新提示（由 sw-bridge.js dispatch window.__SW_UPDATE__）
   // 点击「刷新」不能直接 location.reload()：Chrome 不会因 reload 激活 waiting worker，
   // 必须先让新 SW 接管（SKIP_WAITING → activate → controllerchange），再刷新。
-  window.addEventListener('__SW_UPDATE__', () => {
-    toast('新版本可用，点击刷新', 'warn', { label: '刷新', onClick: activateAndUpdate });
+  window.addEventListener('__SW_UPDATE__', (e) => {
+    const v = e && e.detail && e.detail.version ? `（${e.detail.version}）` : '';
+    toast(`新版本可用${v}，点击刷新`, 'warn', { label: '刷新', onClick: activateAndUpdate });
   });
 
   function activateAndUpdate() {

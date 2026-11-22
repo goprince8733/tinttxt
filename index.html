@@ -289,6 +289,9 @@
             <svg class="ic" aria-hidden="true"><use href="#ic-chevron-left"></use></svg>
           </button>
           <h2>后台播放自检</h2>
+          <button type="button" class="btn btn-sm" id="btn-diag-trace" title="复制系统语音的逐句事件日志（排查息屏跳块用）">
+            <span>复制播放日志</span>
+          </button>
           <button type="button" class="btn btn-sm" id="btn-diag-refresh">
             <svg class="ic" aria-hidden="true"><use href="#ic-refresh"></use></svg><span>刷新快照</span>
           </button>
@@ -296,6 +299,8 @@
 
         <p class="diag-note">数据来自播放层诊断心跳（Events.DIAG / player._diag()）。心跳停止说明页面被系统冻结。
           <b>一眼分辨断音原因</b>：心跳停 + 在途 fetch 冻在原地 = 页面被冻结；心跳在走 + connection 断/在途 fetch 挂着不动 = 网络断了。</p>
+
+        <pre id="diag-trace-out" hidden style="max-height:18rem;overflow:auto;font-size:0.7rem;line-height:1.45;background:var(--bg-elev);border:1px solid var(--border);border-radius:0.5rem;padding:0.5rem;white-space:pre-wrap"></pre>
 
         <dl class="diag-grid">
           <div class="diag-item"><dt>audio 播放状态</dt><dd id="d-audio">—</dd></div>
@@ -580,10 +585,18 @@
       <section class="set-group">
         <h3 class="set-title">关于</h3>
         <p class="about-text">
-          蝈蝈听书 · 版本 0.1.0<br />
+          蝈蝈听书 · 版本 <span id="app-build">（未标记）</span><br />
           纯前端离线听书：断句 / 章节 / TTS / 播放分层架构，音频经真实 &lt;audio&gt; 播放以获得系统后台豁免。<br />
           本地模型与运行时全部自托管，本地合成时文本不出设备；无任何第三方 CDN 依赖，离线可开。<br />
           作者邮箱：<a href="mailto:13300255@qq.com">13300255@qq.com</a>
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-sm" id="btn-check-update">检查更新</button>
+          <span class="field-note" id="update-status" role="status" aria-live="polite"></span>
+        </div>
+        <p class="field-note">
+          排查问题时请把上面的版本号发给我——它能确认你手机上跑的是不是最新代码
+          （浏览器缓存有时会让你停留在旧版本）。
         </p>
       </section>
     </div>

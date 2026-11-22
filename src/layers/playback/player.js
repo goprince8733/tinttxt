@@ -622,6 +622,7 @@ export function createPlayer(deps) {
     }
 
     if (el.src !== chunk.url) el.src = chunk.url;
+    trace({ kind: 'chunk', idx: chunk.index, preview: !!chunk.preview, from: opts.startSentence != null ? opts.startSentence : null });
 
     // 定位到句
     let seekTo = 0;
@@ -732,8 +733,19 @@ export function createPlayer(deps) {
     return previewSpeakFrom(chunk, inChunk ? state.sentenceIndex : chunk.sentenceStart);
   }
 
+  /** 系统语音事件环形日志（排查"息屏跳块"用；最多 200 条）。 */
+  const traceLog = [];
+  function trace(ev) {
+    try {
+      traceLog.push({ t: Date.now(), ...ev });
+      if (traceLog.length > 200) traceLog.shift();
+    } catch { /* ignore */ }
+  }
+
   /** 系统语音会话代号：暂停/跳句/切块都会 +1，作废旧 utterance 的回调。 */
   let previewGen = 0;
+  /** 当前句的重试计数（同一句最多重念 2 次；换句归零）。 */
+  const retryState = { i: -1, n: 0 };
   /** 被系统打断（多为熄屏）时停在的句子：恢复时从这句重讲，绝不静默跳过。 */
   let previewResumeIdx = -1;
   /** 被打断时所在的块（跨块恢复用）。 */
@@ -789,14 +801,23 @@ export function createPlayer(deps) {
 
       let spoke = false;
       const speakT0 = Date.now();
+      const expectedMs = Math.max(500, (s.speak.length / (4.5 * (state.rate || 1))) * 1000);
+      const isHidden = () => {
+        try { return document.visibilityState === 'hidden'; } catch { return false; }
+      };
+      // 同一句的重试计数：换句就归零
+      if (retryState.i !== i) { retryState.i = i; retryState.n = 0; }
+      trace({ kind: 'speak', idx: i, chars: s.speak.length, expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: retryState.n, chunk: chunk.index });
+
       const watchdog = setTimeout(() => {
         if (gen !== previewGen || spoke) return;
         // 息屏后台时系统可能临时挂起 TTS：此时不能判"没声音"（误报会让播放中断）
-        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        if (isHidden()) return;
         // 有些浏览器不触发 onstart：只要 speechSynthesis.speaking 为真就算已经在念
         try {
           if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) return;
         } catch { /* ignore */ }
+        trace({ kind: 'watchdog', idx: i, hidden: isHidden(), chunk: chunk.index });
         // 2 秒还没开始出声：多半是系统没有中文语音包/被系统静音 → 明确告知而不是假装在播
         setStatus('error', '系统语音没有出声：可能是手机缺少中文语音包，或该浏览器不支持。可在「语音来源」里切到百度语音。');
         bus.emit(Events.ERROR, {
@@ -807,30 +828,52 @@ export function createPlayer(deps) {
         stopKeepAlive(); // 没出声就不要再维持媒体会话
       }, 2000);
 
-      u.onstart = () => { spoke = true; clearTimeout(watchdog); };
+      u.onstart = () => {
+        spoke = true;
+        clearTimeout(watchdog);
+        trace({ kind: 'start', idx: i, afterMs: Date.now() - speakT0, chunk: chunk.index });
+      };
 
       /**
-       * 关键：区分「这句真的念完了」和「被系统打断」。
-       * 息屏瞬间 ArkWeb 会打断当前 utterance（onerror=interrupted/canceled，或立刻 onend），
-       * 若把它当"念完了"继续 i++，就会把整块剩余句子**静默跳过**，
-       * 到块尾再 advanceChunk → 表现为"熄屏跳过一个语音块"。
+       * 核心修复：区分「真的念完了」和「被系统打断」。
+       * 华为 ArkWeb 在熄屏瞬间会打断当前 utterance（onerror=interrupted/canceled，或提前 onend）。
+       * 旧逻辑把它当"念完了"继续 i++，就会把整块剩余句子静默跳过 → 表现成"熄屏跳过一个语音块"。
+       * 现在：耗时明显短于该句应有长度 → 判定被打断 → **重念同一句**（最多 2 次）而不是推进。
        */
-      const interrupted = (e) => {
-        const kind = e && e.error;
-        if (kind === 'interrupted' || kind === 'canceled' || kind === 'audio-busy') return true;
-        // 没有 onstart 且在 250ms 内就结束 → 基本是被打断，而不是真念完
-        return !spoke && Date.now() - speakT0 < 250;
-      };
-      const suspendHere = () => {
-        previewResumeIdx = i; // 记住被打断的句子，亮屏/恢复时从这句重讲
-        previewChunkRef = chunk;
-        setStatus('playing'); // 保持"想播"的意图，不显示错误
+      const suspiciousEnd = (elapsed) => (spoke ? elapsed < expectedMs * 0.55 : elapsed < 400);
+
+      const handleInterrupted = (reason, elapsed) => {
+        trace({ kind: 'interrupted', idx: i, reason, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: retryState.n, chunk: chunk.index });
+        if (retryState.n < 2) {
+          retryState.n += 1;
+          trace({ kind: 'retry', idx: i, attempt: retryState.n, chunk: chunk.index });
+          setTimeout(() => {
+            if (gen !== previewGen || destroy || !wantPlaying) return;
+            speakNext();
+          }, 260);
+          return;
+        }
+        // 重试用尽
+        if (isHidden()) {
+          // 息屏中系统确实挂起了 TTS：停在原句，等亮屏继续，绝不跳块
+          previewResumeIdx = i;
+          previewChunkRef = chunk;
+          trace({ kind: 'suspend', idx: i, chunk: chunk.index });
+          setStatus('playing');
+          return;
+        }
+        trace({ kind: 'giveup', idx: i, chunk: chunk.index });
+        i += 1;
+        if (wantPlaying) speakNext();
+        else setStatus('paused');
       };
 
       u.onend = () => {
         clearTimeout(watchdog);
         if (gen !== previewGen || destroy) return;
-        if (interrupted()) { suspendHere(); return; }
+        const elapsed = Date.now() - speakT0;
+        trace({ kind: 'end', idx: i, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), spoke, hidden: isHidden(), chunk: chunk.index });
+        if (suspiciousEnd(elapsed)) { handleInterrupted(spoke ? 'short-end' : 'no-start-end', elapsed); return; }
         i += 1;
         if (wantPlaying) speakNext();
         else setStatus('paused');
@@ -838,7 +881,11 @@ export function createPlayer(deps) {
       u.onerror = (e) => {
         clearTimeout(watchdog);
         if (gen !== previewGen || destroy) return;
-        if (interrupted(e)) { suspendHere(); return; }
+        const kind = (e && e.error) || 'error';
+        const elapsed = Date.now() - speakT0;
+        trace({ kind: 'error', idx: i, error: kind, elapsed: Math.round(elapsed), hidden: isHidden(), chunk: chunk.index });
+        const hard = kind === 'interrupted' || kind === 'canceled' || kind === 'audio-busy';
+        if (hard || suspiciousEnd(elapsed)) { handleInterrupted(kind, elapsed); return; }
         i += 1; // 真正失败的句子不卡死，继续下一句
         if (wantPlaying) speakNext();
       };
@@ -1555,7 +1602,10 @@ export function createPlayer(deps) {
       error: state.error || null,
       keepAlive: isKeepAliveOn(),
       engine: activeEngineId,
+      trace: traceLog.slice(-30),
     }),
+    /** 完整系统语音事件日志（供自检页「复制播放日志」） */
+    _trace: () => traceLog.slice(),
     // 供导出音频：按块取 blob
     _getChunkBlob: async (index) => (await ensureChunk(index)).blob,
     _chunkCount: () => chunkBounds.length,

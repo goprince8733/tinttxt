@@ -272,6 +272,14 @@ export function createSettings(ctx) {
     if (dlBtn) dlBtn.disabled = !isLocal;
     void refreshDialogueNote();
     void refreshCustomVoices();
+
+    // 版本号：排查问题时要靠它确认设备跑的是哪一版（避免被浏览器缓存骗了）
+    const buildEl = $('#app-build');
+    if (buildEl) {
+      const info = app.getBuildInfo ? app.getBuildInfo() : { build: 'dev', sw: false };
+      buildEl.textContent = info.build || 'dev';
+      buildEl.title = info.sw ? '已由 Service Worker 接管' : '未接管（将每次联网加载最新代码）';
+    }
   }
 
   /* ---------------- 开关 ---------------- */
@@ -476,6 +484,36 @@ export function createSettings(ctx) {
     btnClearSpeech.addEventListener('click', () => {
       void (async () => {
         try { await app.clearSpeechCache(); } catch (e) { ctx.toast(`清除失败：${(e && e.message) || e}`, 'error'); }
+      })();
+    });
+  }
+
+  // 检查更新（设置 → 关于）
+  const btnCheckUpdate = $('#btn-check-update');
+  if (btnCheckUpdate) {
+    btnCheckUpdate.addEventListener('click', () => {
+      void (async () => {
+        const status = $('#update-status');
+        const bridge = window.__SW_BRIDGE__;
+        if (!bridge || !bridge.supported) {
+          if (status) status.textContent = '当前浏览器不支持 Service Worker（不影响朗读）';
+          return;
+        }
+        if (status) status.textContent = '检查中…（最多 15 秒）';
+        const res = await bridge.checkForUpdate();
+        if (res && res.hasUpdate) {
+          if (status) status.textContent = '发现新版本，正在更新…';
+          // 直接激活并刷新（与「刷新」按钮同一路径）
+          try {
+            ctx.toast('发现新版本，正在更新…', 'info');
+            bridge.skipWaiting();
+            setTimeout(() => location.reload(), 1200);
+          } catch { /* ignore */ }
+        } else {
+          const v = app.getBuildInfo ? app.getBuildInfo().build : 'dev';
+          if (status) status.textContent = `已是最新版本（${v}）`;
+          ctx.toast(`已是最新版本（${v}）`, 'success');
+        }
       })();
     });
   }

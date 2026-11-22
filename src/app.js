@@ -29,6 +29,15 @@ async function sha256Hex(text) {
 export async function createApp() {
   const bus = createBus();
   let settings = await store.getSettings();
+  /** 构建号（部署时注入到 index.html 的 meta）：用于确认设备上跑的是哪一版。 */
+  const buildInfo = (() => {
+    try {
+      const m = document.querySelector('meta[name="app-build"]');
+      return { build: m && m.content ? m.content : 'dev', sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller) };
+    } catch {
+      return { build: 'dev', sw: false };
+    }
+  })();
 
   /* ---------------- TTS 注册 ---------------- */
   const registry = new TtsRegistry();
@@ -496,6 +505,10 @@ export async function createApp() {
     if (patch.ttsEngine !== undefined && patch.ttsEngine !== prev.ttsEngine) {
       // 引擎切换：重置下载状态、作废旧音频块并重新解析适配器
       modelState.status = 'idle';
+      // 换引擎必须允许重新自动下载：否则从 sherpa 切到 Piper 时
+      // autoDownloadStarted 仍是 true，Piper 永远不会开始下载（实测卡在 idle）。
+      autoDownloadStarted = false;
+      warmupStarted = false;
       player.invalidateAudio();
       // cloudTtsEnabled 与 ttsEngine 保持单一事实来源：必须落盘，
       // 只改内存的话刷新后会不一致（曾导致百度音色分组被误判为未开启而整组消失）。
@@ -539,6 +552,8 @@ export async function createApp() {
   }
 
   const getSettings = () => ({ ...settings });
+  /** 版本信息（构建号 + 是否已被 SW 接管），排查问题时非常关键。 */
+  const getBuildInfo = () => ({ ...buildInfo, sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller) });
 
   /* ---------------- 模型下载 ---------------- */
 
@@ -839,6 +854,7 @@ export async function createApp() {
     registry,
     resolveAdapter,
     setBookOpenHook,
+    getBuildInfo,
     clearOfflineModels,
     clearSpeechCache,
     // 导入/书架

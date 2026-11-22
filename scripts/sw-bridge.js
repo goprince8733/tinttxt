@@ -135,4 +135,47 @@
   bridge.skipWaiting = function () {
     window.dispatchEvent(new CustomEvent('__SW_SKIP_WAITING__'));
   };
+
+  /**
+   * 主动检查更新：resolve { supported, hasUpdate }。
+   * 新 SW 需要下载并预缓存（1~2MB），所以这里用轮询等最多 15 秒，
+   * 不能像早先那样只等 2.5 秒（会误报"已最新"）。
+   */
+  bridge.checkForUpdate = function () {
+    if (!bridge.supported) return Promise.resolve({ supported: false, hasUpdate: false });
+    var reg = bridge.registration;
+    if (!reg) return Promise.resolve({ supported: true, hasUpdate: false });
+    return new Promise(function (resolve) {
+      var done = false;
+      var poll = 0;
+      var timer = 0;
+      function finish(hasUpdate) {
+        if (done) return;
+        done = true;
+        clearInterval(poll);
+        clearTimeout(timer);
+        resolve({ supported: true, hasUpdate: !!hasUpdate });
+      }
+      function check() {
+        try {
+          if (reg.waiting) return finish(true);
+          var inst = reg.installing;
+          if (inst && inst.state === 'installed' && window.navigator.serviceWorker.controller) return finish(true);
+        } catch (e) { /* ignore */ }
+      }
+      poll = setInterval(check, 300);
+      timer = setTimeout(function () { finish(false); }, 15000);
+      Promise.resolve(reg.update()).then(check).catch(function () { /* 网络失败：等超时 */ });
+    });
+  };
+
+  // 回到前台时自动检查一次（10 分钟节流），让手机上不必手动刷新
+  bridge.lastUpdateCheck = 0;
+  window.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
+    var now = Date.now();
+    if (now - bridge.lastUpdateCheck < 10 * 60 * 1000) return;
+    bridge.lastUpdateCheck = now;
+    bridge.checkForUpdate();
+  });
 })();

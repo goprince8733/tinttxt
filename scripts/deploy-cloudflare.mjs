@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -162,6 +162,12 @@ const HEADERS = `/*
   Cache-Control: no-cache
 
 /asset-chunks.json
+  Cache-Control: no-cache
+
+/build-info.json
+  Cache-Control: no-cache
+
+/sw.js
   Cache-Control: no-cache
 
 /api/*
@@ -352,6 +358,56 @@ async function verifyCloudApi(project) {
   throw new Error(`部署后云端自检失败：${lastErr ? lastErr.message : '未知'}`);
 }
 
+/**
+ * 给本次构建打版本号，并写进两个地方：
+ *  1) dist/sw.js 的 CACHE_VERSION —— 换缓存名 ⇒ 浏览器必然发现新 SW ⇒ 才会弹「新版本可用」
+ *     （以前版本号一直不变，导致部署后手机长期跑旧代码）
+ *  2) dist/index.html 的 <meta name="app-build"> —— 页面据此显示版本，便于远程确认跑的是哪版
+ * 同时写 dist/build-info.json 便于 curl 检查。
+ */
+async function stampBuild() {
+  if (process.env.DEPLOY_NO_BUMP === '1') {
+    log('DEPLOY_NO_BUMP=1：跳过版本号改写');
+    return null;
+  }
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  let sha = '';
+  try {
+    sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  } catch { /* 非 git 环境忽略 */ }
+  const buildId = sha ? `${stamp}-${sha}` : stamp;
+
+  // 1) sw.js：改写 CACHE_VERSION
+  const swPath = path.join(DIST, 'sw.js');
+  if (!fs.existsSync(swPath)) throw new Error('dist/sw.js 不存在，无法写入版本号');
+  let sw = await fsp.readFile(swPath, 'utf8');
+  if (!/const CACHE_VERSION = ['"][^'"]*['"];/.test(sw)) {
+    throw new Error('dist/sw.js 中找不到 CACHE_VERSION，版本号注入失败');
+  }
+  sw = sw.replace(/const CACHE_VERSION = ['"][^'"]*['"];/, `const CACHE_VERSION = '${buildId}';`);
+  await fsp.writeFile(swPath, sw, 'utf8');
+
+  // 2) index.html：注入/替换 meta
+  const htmlPath = path.join(DIST, 'index.html');
+  if (!fs.existsSync(htmlPath)) throw new Error('dist/index.html 不存在，无法写入版本号');
+  let html = await fsp.readFile(htmlPath, 'utf8');
+  html = html.replace(/\s*<meta name="app-build"[^>]*>/g, '');
+  if (!html.includes('</head>')) throw new Error('dist/index.html 缺少 </head>，无法注入版本号');
+  html = html.replace('</head>', `  <meta name="app-build" content="${buildId}">\n</head>`);
+  await fsp.writeFile(htmlPath, html, 'utf8');
+
+  // 3) 附带信息（便于 curl 验证）
+  await fsp.writeFile(
+    path.join(DIST, 'build-info.json'),
+    JSON.stringify({ build: buildId, time: d.toISOString(), sw: true }, null, 2) + '\n',
+    'utf8',
+  );
+  log(`版本号：${buildId}（已写入 sw.js / index.html）`);
+  return buildId;
+}
+
 // ---------------------------------------------------------------------------
 // 5) 上传
 // ---------------------------------------------------------------------------
@@ -413,6 +469,8 @@ async function main() {
 
   await splitOversized();
   await writeSupportFiles();
+  // 版本号一定要在 writeSupportFiles 之后、上传之前写入（--no-build 也要执行）
+  const buildId = await stampBuild();
 
   let url = '';
   if (dryRun) {

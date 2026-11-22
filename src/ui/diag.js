@@ -339,6 +339,45 @@ export function createDiag(ctx) {
 
   $('#btn-diag-refresh').addEventListener('click', refresh);
   $('#btn-diag-back').addEventListener('click', () => ctx.router.go('#shelf'));
+
+  // 复制系统语音的逐句事件日志：排查"息屏跳块"时，这是唯一能看到设备真实事件的证据
+  const btnTrace = $('#btn-diag-trace');
+  if (btnTrace) {
+    btnTrace.addEventListener('click', () => {
+      void (async () => {
+        const info = app.getBuildInfo ? app.getBuildInfo() : { build: 'dev' };
+        const trace = app.player && app.player._trace ? app.player._trace() : [];
+        const head = `build=${info.build} ua=${navigator.userAgent} at=${new Date().toISOString()}`;
+        const text = [head, ...trace.map((x) => JSON.stringify(x))].join('\n');
+        let ok = false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            ok = true;
+          }
+        } catch { /* 走兜底 */ }
+        if (!ok) {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+            document.body.appendChild(ta);
+            ta.select();
+            ok = document.execCommand('copy');
+            ta.remove();
+          } catch { ok = false; }
+        }
+        if (ok) ctx.toast(`已复制播放日志（${trace.length} 条），发给开发者即可定位`, 'success');
+        else ctx.toast('复制失败：请长按下方日志手动复制', 'warn');
+        // 无论复制成败都把日志渲染到页面，便于手动选择
+        const pre = document.getElementById('diag-trace-out');
+        if (pre) {
+          pre.hidden = false;
+          pre.textContent = text.slice(-8000);
+        }
+      })();
+    });
+  }
   $('#btn-rtf-test').addEventListener('click', () => {
     void runRtfTest();
   });
