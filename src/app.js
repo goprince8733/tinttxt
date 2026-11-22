@@ -603,14 +603,24 @@ export async function createApp() {
     autoDownloadStarted = false;
     warmupStarted = false;
     bus.emit(Events.STATE, { model: { ...modelState } });
-    bus.emit(Events.TOAST, { message: `已清除 ${deleted} 组离线模型，刷新后彻底生效`, level: 'success' });
+    bus.emit(Events.TOAST, {
+      message: deleted > 0 ? `已清除 ${deleted} 组离线模型，正在刷新…` : '本来就没有下载过离线模型',
+      level: deleted > 0 ? 'success' : 'info',
+    });
     return deleted;
   }
 
   /** 清除朗读音频缓存（按句缓存的 WAV）。 */
   async function clearSpeechCache() {
+    // 先停播：否则内存里的合并块还会继续播旧音频，用户会以为"清除没生效"
+    const wasPlaying = player.getState().status === 'playing' || player.getState().status === 'loading';
+    if (wasPlaying) player.pause();
     await clearAudioCache();
-    bus.emit(Events.TOAST, { message: '已清除朗读缓存', level: 'success' });
+    player.invalidateAudio(); // 丢掉内存块 + blob URL，确保下一次真的重新合成
+    bus.emit(Events.TOAST, {
+      message: wasPlaying ? '已清除朗读缓存（已暂停，点播放会重新合成）' : '已清除朗读缓存',
+      level: 'success',
+    });
   }
   async function checkModel() {    const usePiper = settings.ttsEngine === 'local-piper';
     const adapter = usePiper ? localAdapter : sherpaAdapter;

@@ -566,6 +566,7 @@ export function createPlayer(deps) {
     if (nextIdx >= chunkBounds.length) {
       // 本书读完
       wantPlaying = false;
+      stopKeepAlive(); // 读完必须停保活，否则静音音频会一直循环（耗电 + 媒体通知卡住）
       setStatus('paused');
       patchState({ charOffset: sentences.length ? sentences[sentences.length - 1].end : state.charOffset });
       bus.emit(Events.TOAST, { message: '本书已读完', level: 'info' });
@@ -783,6 +784,10 @@ export function createPlayer(deps) {
       let spoke = false;
       const watchdog = setTimeout(() => {
         if (gen !== previewGen || spoke) return;
+        // 有些浏览器不触发 onstart：只要 speechSynthesis.speaking 为真就算已经在念
+        try {
+          if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) return;
+        } catch { /* ignore */ }
         // 2 秒还没开始出声：多半是系统没有中文语音包/被系统静音 → 明确告知而不是假装在播
         setStatus('error', '系统语音没有出声：可能是手机缺少中文语音包，或该浏览器不支持。可在「语音来源」里切到百度语音。');
         bus.emit(Events.ERROR, {
@@ -790,6 +795,7 @@ export function createPlayer(deps) {
           recoverable: true,
         });
         wantPlaying = false;
+        stopKeepAlive(); // 没出声就不要再维持媒体会话
       }, 2000);
 
       u.onstart = () => { spoke = true; clearTimeout(watchdog); };
@@ -1003,7 +1009,7 @@ export function createPlayer(deps) {
           bus.emit(Events.TOAST, {
             message: KEEPALIVE_DISABLED
               ? '使用手机自带语音朗读（熄屏可能暂停；可切到百度语音后台播放）'
-              : '使用手机自带语音朗读（已开启熄屏保活实验；若熄屏仍停，可切到百度语音）',
+              : '使用手机自带语音朗读（已尝试开启熄屏保活；若熄屏仍停，可切到百度语音）',
             level: 'info',
           });
         }

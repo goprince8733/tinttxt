@@ -453,6 +453,10 @@ export function createSettings(ctx) {
   if (btnClearModels) {
     btnClearModels.addEventListener('click', () => {
       void (async () => {
+        if (app.modelState().status === 'downloading') {
+          ctx.toast('正在下载模型，请等下载完成后（或先切到系统语音）再清除', 'warn');
+          return;
+        }
         const ans = await ctx.modal.confirm({
           title: '清除已下载的离线模型？',
           message: '会删除 sherpa / Piper / 自定义音色模型文件（释放 39~121MB）。之后想用本地语音需要重新下载。',
