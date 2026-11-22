@@ -808,6 +808,11 @@ export function createPlayer(deps) {
     previewResumeIdx = -1; // 新一轮朗读：清掉上次断点（真正的断点由 handleInterrupted 记录）
     retryState.i = -1; // 新会话重置重试计数（否则"重念同一句"的计数会跨会话残留）
     retryState.n = 0;
+    // 新会话（点播放/跳句/亮屏续播）也给挂起重试一次全新的预算，
+    // 否则上一轮用尽的 3 次会一直生效，刚恢复就又立刻放弃。
+    stallState.i = -1;
+    stallState.n = 0;
+    clearStallTimer();
     let i = Math.max(chunk.sentenceStart, Math.min(startIdx, chunk.sentenceEnd - 1));
 
     const stopIfStale = () => destroy || gen !== previewGen || !wantPlaying;
@@ -877,6 +882,10 @@ export function createPlayer(deps) {
           if (speaking) { armStall(); return; } // 确实在念（只是没触发 onstart）
           if (stallState.n >= STALL_MAX) {
             trace({ kind: 'stallGiveUp', idx: i, attempt: stallState.n, chunk: chunk.index });
+            // 别再假装在播：重试用尽说明引擎确实起不来。
+            // 置为 paused（而不是 error）——亮屏后 onVisible 会自动从本句续播，
+            // 用户点播放也会恢复；同时避免"显示播放中但没有声音"的静默死亡。
+            setStatus('paused');
             return;
           }
           stallState.n += 1;
