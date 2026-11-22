@@ -273,12 +273,17 @@ export function createSettings(ctx) {
     if (cloudRow) cloudRow.hidden = !unlocked;
     const engineNote = $('#engine-note');
     if (engineNote) {
-      // 不写死菜单路径：华为 EMUI / HarmonyOS 各版本名称不同（辅助功能→无障碍→文字转语音输出 等），
-      // 给"设置里搜索"这个任何版本都成立的做法。
-      const tip = '想换系统发音人：手机「设置」里搜索「文字转语音」或「TTS」（不同机型菜单名不一样）';
-      engineNote.textContent = unlocked
-        ? `默认使用手机自带语音：不联网、不花钱。${tip}。百度语音仅本机可见（按字消耗额度）。`
-        : `默认使用手机自带语音：不联网、不花钱。${tip}。`;
+      // 说明要跟着当前引擎走，否则选「本地离线」时还写着"默认使用手机自带语音"，容易误解
+      const curEngine = s.ttsEngine || 'system';
+      if (curEngine === 'local-sherpa' || curEngine === 'local-piper') {
+        engineNote.textContent = '本地离线合成：文本不出设备、不联网；首次使用需下载模型（在下方「离线模型」里）。';
+      } else if (curEngine === 'cloud') {
+        engineNote.textContent = '百度云端语音：真人音色、可后台播放；需联网并按字消耗额度。想换系统发音人：手机「设置」里搜索「文字转语音」或「TTS」。';
+      } else {
+        // 不写死菜单路径：华为 EMUI / HarmonyOS 各版本名称不同（辅助功能→无障碍→文字转语音输出 等），
+        // 给"设置里搜索"这个任何版本都成立的做法。
+        engineNote.textContent = '默认使用手机自带语音：不联网、不花钱。想换系统发音人：手机「设置」里搜索「文字转语音」或「TTS」（不同机型菜单名不一样）。';
+      }
     }
 
     // 版本号：排查问题时要靠它确认设备跑的是哪一版（避免被浏览器缓存骗了）

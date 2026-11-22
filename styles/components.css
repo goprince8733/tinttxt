@@ -623,6 +623,9 @@ input[type="radio"] {
 .set-advanced[open] > summary::before { content: '▾'; }
 .set-advanced > .set-group { border-bottom: 0; padding-bottom: 0.7rem; }
 
+/* "检查更新"旁的状态文本：空的时候不要留一个灰块 */
+#update-status:empty { display: none; }
+
 .set-title {
   font-size: 0.8rem;
   font-weight: 700;
