@@ -155,19 +155,24 @@ function deviceIdOf(request) {
 /**
  * 云端语音「仅本人可用」密钥。
  * 优先环境变量 CLOUD_OWNER_KEY（若将来手动配置），否则读 KV 的 config:cloud-owner-key
- * （部署脚本写入）。isolate 内缓存一次，避免每次请求都读 KV。
+ * （部署脚本写入）。isolate 内缓存 10 分钟：既能少读 KV，又能在轮换密钥后自愈
+ * （永久缓存会导致轮换后旧 isolate 一直认旧 key、拒绝新 key）。
  */
 let cachedOwnerKey = null;
+let cachedOwnerAt = 0;
+const OWNER_KEY_TTL = 10 * 60 * 1000;
 async function ownerKeyOf(env) {
   const fromEnv = String(env.CLOUD_OWNER_KEY || '').trim();
   if (fromEnv) return fromEnv;
-  if (cachedOwnerKey !== null) return cachedOwnerKey;
+  const now = Date.now();
+  if (cachedOwnerKey !== null && now - cachedOwnerAt < OWNER_KEY_TTL) return cachedOwnerKey;
   try {
     const v = env.DATA && typeof env.DATA.get === 'function' ? await env.DATA.get('config:cloud-owner-key') : null;
     cachedOwnerKey = String(v || '').trim();
   } catch {
-    cachedOwnerKey = '';
+    if (cachedOwnerKey === null) cachedOwnerKey = '';
   }
+  cachedOwnerAt = now;
   return cachedOwnerKey;
 }
 
@@ -278,6 +283,13 @@ export async function onRequest(context) {
       // locked=true 表示云端语音已设为"仅本人可用"（未带正确密钥一律 403）
       const locked = !!(await ownerKeyOf(env));
       return withCors(json({ ok: true, provider: provider.name, configured: provider.configured(env), locked, time: new Date().toISOString() }), cors);
+    }
+    if (path === '/owner-check') {
+      // 轻量校验专属密钥是否正确（不消耗额度、不合成）。用于前端"解锁链接"是否有效的提示。
+      const key = await ownerKeyOf(env);
+      if (!key) return withCors(json({ ok: true, locked: false }), cors);
+      const got = String(request.headers.get('x-tinttxt-owner') || '').trim();
+      return withCors(json({ ok: got === key, locked: true }), cors);
     }
     if (path === '/voices' && request.method === 'GET') {
       const provider = resolveProvider(env);

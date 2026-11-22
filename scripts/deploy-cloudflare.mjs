@@ -342,7 +342,9 @@ async function writeOwnerKeyToKv(creds) {
     if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 160)}`);
     log('云端语音密钥已写入 KV（未携带密钥的请求会被 403 拒绝）');
   } catch (e) {
-    log(`⚠ 写入云端语音密钥失败：${e.message}（云端语音可能仍对所有人开放）`);
+    // 写入失败 = 闸门可能没生效（任何人仍可用百度语音并消耗额度）→ 必须让部署失败，
+    // 否则会静默上线一个"对所有人开放"的站点。
+    throw new Error(`写入云端语音密钥失败：${e.message}（为安全起见终止部署）`);
   }
 }
 
@@ -391,6 +393,9 @@ async function verifyCloudApi(project) {
       });
       if (!probe.ok) {
         const msg = await probe.text().catch(() => '');
+        if (probe.status === 403) {
+          throw new Error('合成自检被拒绝（403）：云端语音密钥未生效——检查 .tooling/cloud-owner-key.txt 与 KV 写入是否成功');
+        }
         throw new Error(`合成自检失败 HTTP ${probe.status} ${msg.slice(0, 160)}`);
       }
       const ctype = probe.headers.get('content-type') || '';

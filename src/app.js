@@ -39,6 +39,20 @@ export async function createApp() {
       setOwnerKey(k);
       u.searchParams.delete('owner');
       window.history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+      // 后台校验密钥是否真的有效：错的 key 会让百度语音一直报 403，
+      // 所以校验失败就清掉并提示，而不是留个"看得见用不了"的入口。
+      fetch('/api/owner-check', { headers: { 'x-tinttxt-owner': k } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => {
+          if (j && j.locked && !j.ok) {
+            setOwnerKey('');
+            bus.emit(Events.TOAST, { message: '专属链接无效，百度语音保持关闭', level: 'warn' });
+            setTimeout(() => { try { location.reload(); } catch { /* ignore */ } }, 1200);
+          } else if (j && j.ok && j.locked) {
+            bus.emit(Events.TOAST, { message: '百度语音已在本机启用（仅本机可见）', level: 'success' });
+          }
+        })
+        .catch(() => { /* 离线：保留乐观解锁，联网后再判 */ });
     }
   } catch { /* 解析失败：忽略 */ }
 
