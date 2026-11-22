@@ -273,9 +273,12 @@ export function createSettings(ctx) {
     if (cloudRow) cloudRow.hidden = !unlocked;
     const engineNote = $('#engine-note');
     if (engineNote) {
+      // 不写死菜单路径：华为 EMUI / HarmonyOS 各版本名称不同（辅助功能→无障碍→文字转语音输出 等），
+      // 给"设置里搜索"这个任何版本都成立的做法。
+      const tip = '想换系统发音人：手机「设置」里搜索「文字转语音」或「TTS」（不同机型菜单名不一样）';
       engineNote.textContent = unlocked
-        ? '默认使用手机自带语音：不联网、不花钱、音色最好。百度语音仅本机可见（按字消耗额度，请按需使用）。'
-        : '默认使用手机自带语音：不联网、不花钱、音色最好。百度语音已关闭（避免消耗额度）。';
+        ? `默认使用手机自带语音：不联网、不花钱。${tip}。百度语音仅本机可见（按字消耗额度）。`
+        : `默认使用手机自带语音：不联网、不花钱。${tip}。`;
     }
 
     // 版本号：排查问题时要靠它确认设备跑的是哪一版（避免被浏览器缓存骗了）

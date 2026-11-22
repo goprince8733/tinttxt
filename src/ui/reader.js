@@ -703,8 +703,10 @@ export function createPlayerView(ctx) {
       if (previewBtn) previewBtn.hidden = true;
       if (hint) {
         hint.hidden = false;
+        // 注意：不同华为机型/系统版本的菜单名不一样（EMUI / HarmonyOS 有差异），
+        // 所以给出「设置里搜索」这个通用做法，不再写死一个可能不存在的菜单路径。
         hint.textContent = engine === 'system'
-          ? '系统语音未提供音色列表，可在手机「设置 → 语音合成」里更换默认发音人'
+          ? '手机没有把可选音色开放给网页，当前用系统默认发音人。想换发音人：手机「设置」里搜索「文字转语音」或「TTS」'
           : '当前引擎没有可选音色';
       }
     } else {
