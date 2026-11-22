@@ -70,6 +70,8 @@ export function createPlayerView(ctx) {
    * 若不忽略就会被判定成"用户手动滑动"，换章后跟随会莫名暂停 8 秒。
    */
   let ignoreScrollUntil = 0;
+  /** 提示进度线动画的重启限流（避免 touchmove 高频强制重排） */
+  let lastHintAnimAt = 0;
   let activeSpan = null;
   /** 手动滑动后自动恢复跟随的等待时长 */
   const FOLLOW_RESUME_MS = 8000;
@@ -325,7 +327,11 @@ export function createPlayerView(ctx) {
       followHint.classList.remove('counting');
       return;
     }
-    // 重新触发 CSS 动画：用户持续滑动时计时会被重置，进度线也必须从头走
+    // 重新触发 CSS 动画：用户持续滑动时计时会被重置，进度线也必须从头走。
+    // 但 touchmove 每秒会触发几十次，强制重排太贵（低端机会卡）→ 限流到 4 次/秒。
+    const now = Date.now();
+    if (now - lastHintAnimAt < 250) return;
+    lastHintAnimAt = now;
     followHint.classList.remove('counting');
     void followHint.offsetWidth;
     followHint.classList.add('counting');
@@ -370,8 +376,21 @@ export function createPlayerView(ctx) {
 
   // 手指一开始移动就暂停并显示提示 —— 不再等 scroll 事件（部分内核首帧不派发 scroll，
   // 会造成"滑完了才出现提示"）。这是用户感知最直接的时机。
-  readerScroll.addEventListener('touchmove', () => {
+  // 但要点按也会产生微小位移：移动 < 8px 视作点按，不暂停（否则轻点一下就弹提示）。
+  let touchStartY = null;
+  let touchMoved = false;
+  readerScroll.addEventListener('touchstart', (e) => {
+    const t = e.touches && e.touches[0];
+    touchStartY = t ? t.clientY : null;
+    touchMoved = false;
+  }, { passive: true });
+  readerScroll.addEventListener('touchmove', (e) => {
     if (!followOn || manualPaused) return;
+    const t = e.touches && e.touches[0];
+    if (t && touchStartY != null) {
+      if (!touchMoved && Math.abs(t.clientY - touchStartY) < 8) return; // 点按抖动
+      touchMoved = true;
+    }
     pauseFollow();
   }, { passive: true });
 
