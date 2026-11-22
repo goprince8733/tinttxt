@@ -309,6 +309,46 @@ input[type="radio"] {
   font-weight: 650;
 }
 
+/* 语音来源选择行：必须常驻可见（曾因安装横幅遮挡，手机上看不到音色下拉） */
+.engine-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.seg-compact .seg-btn {
+  min-height: 2.1rem;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.84rem;
+}
+.voice-select-inline {
+  min-height: 2.1rem;
+  min-width: 7.5rem;
+  max-width: 62vw;
+  font-size: 0.86rem;
+}
+
+/* 次控件折叠区：手机上默认收起，保证播放键/语速/音量不被推出屏幕 */
+.ctl-more {
+  grid-column: 1 / -1;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.45rem;
+}
+.ctl-more > summary {
+  cursor: pointer;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+  list-style: none;
+  user-select: none;
+}
+.ctl-more > summary::-webkit-details-marker { display: none; }
+.ctl-more > summary::before { content: '▸ '; }
+.ctl-more[open] > summary::before { content: '▾ '; }
+.ctl-more > .ctl-grid { margin-top: 0.45rem; }
+
+
 /* ---------------- 徽标 / 状态 ---------------- */
 
 .badge {
@@ -755,17 +795,17 @@ input[type="radio"] {
 
 /* ---- PWA 安装引导横幅 ---- */
 .install-banner {
-  position: fixed;
-  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 0.5rem);
-  left: 0.75rem;
-  right: 0.75rem;
-  z-index: 150;
+  /* 放在 #main 内、文档流中：不再 fixed 覆盖正文与播放控件 */
+  position: static;
+  margin: 0 0.75rem 0.5rem;
+  z-index: auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 1rem;
-  padding: 0.85rem 1rem;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  padding: 0.7rem 0.9rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   animation: fadeIn 0.3s ease;
+  flex-shrink: 0;
 }
 .install-banner[hidden] { display: none; }
 .install-banner-content {

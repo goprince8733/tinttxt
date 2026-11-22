@@ -135,6 +135,10 @@ async function main() {
   check('页面装配完成', ready);
   if (!ready) throw new Error('装配失败');
 
+  // v4 默认引擎是「手机自带语音」；本用例专门验证本地 sherpa 链路，先显式切过去
+  await evalJs(`window.__TINTTXT__.app.updateSettings({ ttsEngine: 'local-sherpa' })`);
+  await evalJs(`window.__TINTTXT__.app.resolveAdapter()`);
+
   // 3. 导入测试书（模拟用户手势路径：构造 File 走 importFiles）
   console.log('\n== 导入 ==');
   const imported = await evalJs(`(async () => {

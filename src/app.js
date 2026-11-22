@@ -84,55 +84,73 @@ export async function createApp() {
     return registry.active;
   }
 
-  /** 模型未就绪或引擎未预热时，即时兜底 speech-preview（<1秒出声），同时后台下载/预热。 */
+  /**
+   * 解析当前应使用的引擎。
+   * 优先级完全由用户选择决定（v4）：
+   *   'system'      → 手机自带语音（默认；真机反馈音色最好）
+   *   'cloud'       → 百度云端（默认关闭；失败时回落系统语音）
+   *   'local-sherpa'/'local-piper' → 本地离线（默认关闭，选中才下载模型/预热）
+   */
   async function resolveAdapter() {
-    // 云端 TTS 优先（真人音色 + 秒级合成）；显式关闭或连续失败才回落本地
-    if (settings.cloudTtsEnabled !== false && cloudConfig.endpoint && cloudFailStreak < 2) {
-      return activateEngine('cloud-http');
+    const engine = settings.ttsEngine || 'system';
+
+    if (engine === 'cloud') {
+      if (cloudConfig.endpoint && cloudFailStreak < 2) return activateEngine('cloud-http');
+      // 云端暂不可用（网络/额度）→ 回落系统语音，不强制下载本地模型
+      return activateEngine('speech-preview');
     }
-    // 用户显式选择 Piper 档时尊重其选择
-    if (settings.ttsEngine === 'local-piper') {
+
+    if (engine === 'local-piper') {
       const piperReady = await localAdapter.isReady().catch(() => false);
-      if (piperReady || modelState.status === 'downloading') {
-        return activateEngine('local-piper');
-      }
-    }
-    const ready = await sherpaAdapter.isReady().catch(() => false);
-    const warmedUp = sherpaAdapter.isWarmedUp();
-    if (ready && warmedUp) {
-      return activateEngine('local-sherpa');
-    }
-    // 正在下载中：先占位本地引擎，下载完成即就绪
-    if (modelState.status === 'downloading') {
-      return activateEngine('local-sherpa');
-    }
-    // 文件已下载但引擎未预热（wasm 编译+模型加载 10~30秒）→ 即时兜底 + 后台预热
-    if (ready && !warmedUp) {
-      const a = activateEngine('speech-preview');
-      if (!warmupStarted) {
-        warmupStarted = true;
-        void sherpaAdapter.warmup().then(() => {
-          warmupStarted = false;
-          bus.emit(Events.TOAST, { message: '✓ 语音引擎已就绪，已切换到高质量语音', level: 'info' });
-          void resolveAdapter();
-        }).catch(() => {
-          warmupStarted = false;
+      if (piperReady) return activateEngine('local-piper');
+      if (modelState.status === 'downloading') return activateEngine('local-piper');
+      // 未下载：先用系统语音出声，同时后台下载（用户显式选了本地才下载）
+      const active = activateEngine('speech-preview');
+      if (modelState.status === 'idle' && !autoDownloadStarted) {
+        autoDownloadStarted = true;
+        void downloadModel().then(() => {
+          if (modelState.status === 'ready') {
+            bus.emit(Events.TOAST, { message: '✓ Piper 模型已下载，正在初始化…', level: 'info' });
+            void resolveAdapter();
+          }
         });
       }
-      return a;
+      return active;
     }
-    // 模型未就绪且未在下载 → 即时兜底 speech-preview（<1秒出声）+ 自动后台下载
-    const active = activateEngine('speech-preview');
-    if (modelState.status === 'idle' && !autoDownloadStarted) {
-      autoDownloadStarted = true;
-      void downloadModel().then(() => {
-        if (modelState.status === 'ready') {
-          bus.emit(Events.TOAST, { message: '✓ 语音模型已下载，正在初始化语音引擎…', level: 'info' });
-          void resolveAdapter();
+
+    if (engine === 'local-sherpa') {
+      const ready = await sherpaAdapter.isReady().catch(() => false);
+      const warmedUp = sherpaAdapter.isWarmedUp();
+      if (ready && warmedUp) return activateEngine('local-sherpa');
+      if (modelState.status === 'downloading') return activateEngine('local-sherpa');
+      if (ready && !warmedUp) {
+        const a = activateEngine('speech-preview');
+        if (!warmupStarted) {
+          warmupStarted = true;
+          void sherpaAdapter.warmup().then(() => {
+            warmupStarted = false;
+            bus.emit(Events.TOAST, { message: '✓ 本地语音已就绪，已自动切换', level: 'info' });
+            void resolveAdapter();
+          }).catch(() => { warmupStarted = false; });
         }
-      });
+        return a;
+      }
+      // 未下载：先用系统语音出声，同时后台下载
+      const active = activateEngine('speech-preview');
+      if (modelState.status === 'idle' && !autoDownloadStarted) {
+        autoDownloadStarted = true;
+        void downloadModel().then(() => {
+          if (modelState.status === 'ready') {
+            bus.emit(Events.TOAST, { message: '✓ 语音模型已下载，正在初始化…', level: 'info' });
+            void resolveAdapter();
+          }
+        });
+      }
+      return active;
     }
-    return active;
+
+    // 默认：手机自带语音。不下载、不预热、不联网。
+    return activateEngine('speech-preview');
   }
 
   /* ---------------- 播放器 ---------------- */
@@ -478,11 +496,14 @@ export async function createApp() {
       // 引擎切换：重置下载状态、作废旧音频块并重新解析适配器
       modelState.status = 'idle';
       player.invalidateAudio();
-      // 音色 ID 跨引擎不互通（sherpa 的 aishell3-* 传给 piper/speech 不认识）→ 重置为默认
+      // cloudTtsEnabled 与 ttsEngine 保持单一事实来源（老 UI/老存档仍可能只改这个）
+      settings.cloudTtsEnabled = patch.ttsEngine === 'cloud';
+      if (patch.ttsEngine === 'cloud' || prev.ttsEngine === 'cloud') resetCloudHealth();
+      // 音色 ID 跨引擎不互通（百度 per / 系统 voiceURI / 本地音色）→ 清空为默认
       if (settings.voice) {
         settings.voice = null;
         player.setVoice(null);
-        bus.emit(Events.TOAST, { message: '引擎已切换，音色已重置为默认（请重新选择音色）', level: 'info' });
+        bus.emit(Events.TOAST, { message: '已切换语音来源，音色已重置（请重新选择音色）', level: 'info' });
       }
       await resolveAdapter();
       await checkModel().catch(() => {});
@@ -496,9 +517,15 @@ export async function createApp() {
       await resolveAdapter();
     }
     if (patch.cloudTtsEnabled !== undefined) {
-      if (settings.cloudTtsEnabled) resetCloudHealth(); // 重新开启 → 清掉失败计数再试
+      // 兼容旧开关：开启云端 = 选百度引擎；关闭 = 回到系统语音
+      const wantCloud = !!patch.cloudTtsEnabled;
+      const nextEngine = wantCloud ? 'cloud' : (settings.ttsEngine === 'cloud' ? 'system' : settings.ttsEngine);
+      if (nextEngine !== settings.ttsEngine) {
+        await updateSettings({ ttsEngine: nextEngine });
+        return settings;
+      }
       if (settings.cloudTtsEnabled && !cloudConfig.endpoint) {
-        bus.emit(Events.TOAST, { message: '未找到云端语音端点，暂用本地朗读', level: 'warn' });
+        bus.emit(Events.TOAST, { message: '未找到云端语音端点，暂用系统语音', level: 'warn' });
       }
       player.invalidateAudio();
       await resolveAdapter();

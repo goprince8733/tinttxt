@@ -239,9 +239,9 @@ export function createSettings(ctx) {
     chkSkipSep.checked = !!s.skipSeparators;
     txtRegex.value = s.chapterRegex || DEFAULT_CHAPTER_REGEX;
     chkDialogue.checked = !!s.dialogueVoice;
-    chkCloud.checked = !!s.cloudTtsEnabled;
-    cloudNote.hidden = !s.cloudTtsEnabled;
-    if (cloudEndpointRow) cloudEndpointRow.hidden = !s.cloudTtsEnabled;
+    chkCloud.checked = s.ttsEngine === 'cloud';
+    cloudNote.hidden = s.ttsEngine !== 'cloud';
+    if (cloudEndpointRow) cloudEndpointRow.hidden = s.ttsEngine !== 'cloud';
     if (cloudEndpointInput) cloudEndpointInput.value = s.cloudEndpoint || '';
 
     chkWakelock.checked = !!s.wakelockEnabled;
@@ -253,14 +253,23 @@ export function createSettings(ctx) {
       wakelockNote.hidden = true;
     }
 
-    // 引擎与档位：档位选项按引擎分组显示，值分别写入 ttsEngine / sherpaTier / modelTier
-    const engine = s.ttsEngine === 'local-piper' ? 'local-piper' : 'local-sherpa';
+    // 引擎与档位：四选一（system / cloud / local-sherpa / local-piper）
+    const engine = ['system', 'cloud', 'local-piper', 'local-sherpa'].includes(s.ttsEngine) ? s.ttsEngine : 'system';
     for (const r of engineRadios) r.checked = r.value === engine;
     const usePiper = engine === 'local-piper';
-    if (tierSherpaGroup) tierSherpaGroup.hidden = usePiper;
+    // 档位只对本地引擎有意义；系统/云端时整块隐藏
+    if (tierSherpaGroup) tierSherpaGroup.hidden = engine !== 'local-sherpa';
     if (tierPiperGroup) tierPiperGroup.hidden = !usePiper;
     const activeTier = usePiper ? s.modelTier : s.sherpaTier;
     for (const r of tierRadios) r.checked = r.value === activeTier;
+    // 下载入口只在「本地离线」引擎下出现；系统/百度语音不需要模型
+    const isLocal = engine === 'local-sherpa' || engine === 'local-piper';
+    const modelHint = $('#model-section-hint');
+    if (modelHint) modelHint.hidden = isLocal;
+    const dlBtn = $('#btn-settings-download');
+    const dlRow = dlBtn && dlBtn.parentElement;
+    if (dlRow) dlRow.hidden = !isLocal;
+    if (dlBtn) dlBtn.disabled = !isLocal;
     void refreshDialogueNote();
     void refreshCustomVoices();
   }
@@ -421,15 +430,18 @@ export function createSettings(ctx) {
   });
 
   /* TTS 引擎切换 */
+  const ENGINE_LABELS = {
+    system: '手机自带语音',
+    cloud: '百度云端语音',
+    'local-sherpa': '本地 sherpa-onnx',
+    'local-piper': '本地 Piper 中文',
+  };
   for (const r of engineRadios) {
     r.addEventListener('change', async () => {
       if (!r.checked) return;
       const engine = r.value;
       await app.updateSettings({ ttsEngine: engine });
-      const label = engine === 'local-piper'
-        ? 'Piper 中文档（默认：合成快、音色自然；仅个人非商业）'
-        : 'sherpa-onnx 档（Apache-2.0 可商用，单线程合成较慢）';
-      ctx.toast(`已切换引擎：${label}`, engine === 'local-piper' ? 'success' : 'warn');
+      ctx.toast(`已切换语音来源：${ENGINE_LABELS[engine] || engine}`, 'success');
       syncFromSettings();
       ctx.onModelChanged();
       ctx.onVoicesChanged();

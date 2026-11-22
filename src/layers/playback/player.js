@@ -106,6 +106,8 @@ export function createPlayer(deps) {
   let activeEngineId = '';
   /** 用户主动定位（跳句/跳章/拖进度）的代号：块播完的自动前进不得覆盖它。 */
   let seekGen = 0;
+  /** 系统语音提示是否已弹过（默认引擎，避免每次播放刷屏）。 */
+  let previewToastShown = false;
   /** 跨块定位的"开始合成"防抖定时器（连点只合成最终目标）。 */
   let seekBuildTimer = 0;
   /** 引擎作用域下的缓存音色键。 */
@@ -666,6 +668,7 @@ export function createPlayer(deps) {
     const u = new SpeechSynthesisUtterance(chunk.previewText || '');
     u.lang = 'zh-CN';
     u.rate = state.rate;
+    u.volume = state.volume;
     // 预览档也要真正应用所选音色（voice 为 speechSynthesis 的 voiceURI）
     if (state.voice && typeof window.speechSynthesis.getVoices === 'function') {
       const v = window.speechSynthesis.getVoices().find((x) => x.voiceURI === state.voice);
@@ -868,10 +871,14 @@ export function createPlayer(deps) {
     try {
       const adapter = await withTimeout(getAdapter(), 15000, '语音引擎初始化');
       if (adapter.previewOnly) {
-        bus.emit(Events.TOAST, {
-          message: '🎙️ 正在用系统语音朗读（锁屏会中断），高质量语音在后台加载中…',
-          level: 'info',
-        });
+        // 系统语音是默认引擎，不能每次播放都弹提示（连点会刷屏）；每会话只提示一次
+        if (!previewToastShown) {
+          previewToastShown = true;
+          bus.emit(Events.TOAST, {
+            message: '使用手机自带语音朗读（锁屏可能暂停；想要后台播放可切到百度语音）',
+            level: 'info',
+          });
+        }
       } else {
         // <audio> 路径：取消手势上下文里的预热语音，避免双声道重叠
         if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -975,6 +982,7 @@ export function createPlayer(deps) {
             const u = new SpeechSynthesisUtterance(speakText);
             u.lang = 'zh-CN';
             u.rate = state.rate;
+            u.volume = state.volume;
             u.onend = () => {
               // 同块内跳句：说完就停，不自动跳下一块
               if (wantPlaying && !destroy) setStatus('paused');

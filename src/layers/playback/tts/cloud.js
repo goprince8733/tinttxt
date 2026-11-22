@@ -192,7 +192,7 @@ export function createCloudTtsAdapter(config) {
 export function createSpeechPreviewAdapter() {
   return {
     id: 'speech-preview',
-    label: '系统朗读预览（不支持熄屏，仅临时用）',
+    label: '手机自带语音（系统默认）',
     requiresNetwork: false,
     previewOnly: true,
 

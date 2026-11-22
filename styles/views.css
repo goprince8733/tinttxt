@@ -610,3 +610,40 @@
 
 .ob-actions { display: flex; gap: 0.5rem; justify-content: space-between; }
 .ob-actions .btn { flex: 1; }
+
+/* ================= 手机端底部 HUD 压缩 =================
+   问题：HUD 内容高度 > 可用高度时会被底栏遮挡（语速/音量点不到，音色更是常年被安装横幅盖住）。
+   这里在窄屏隐藏进度文字行（进度仍由进度条+高亮体现），并压缩间距，保证控件完整可见。 */
+@media (max-width: 480px) {
+  .hud { gap: 0.3rem; padding: 0.45rem 0.55rem; }
+  .progress-meta { display: none; }
+  .controls { gap: 0.45rem; }
+  .ctl-grid { gap: 0.4rem 0.55rem; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .engine-row { gap: 0.4rem; }
+  .transport .ctl { width: 2.5rem; height: 2.5rem; }
+}
+
+/* ================= 播放页：固定一屏，底部条不再压住控件 =================
+   原问题：#app 用 min-height:100dvh，播放页内容把容器撑到超过视口（实测 1080 > 844），
+   而 tabbar / mini 播放条是 fixed，于是盖住了 HUD 里的语速、音量、音色等控件。
+   这里把播放页锁成一屏高度（内部滚动），并隐藏与 HUD 重复的 mini 播放条。 */
+body[data-route="player"] #app {
+  height: 100dvh;
+  min-height: 0;
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+body[data-route="player"] #main { min-height: 0; }
+body[data-route="player"] .mini-player { display: none; }
+
+/* ================= 矮屏护栏（≤700px 高，如 360x640 老机型） =================
+   安装横幅现在在文档流里，会占掉一截高度；矮屏上宁可暂不展示安装引导，
+   并把 HUD 限高为可滚动，保证播放键/语速/音量/音色永远可达。 */
+@media (max-height: 700px) {
+  .install-banner { display: none; }
+  body[data-route="player"] .hud {
+    max-height: 48vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  body[data-route="player"] .reader-scroll { min-height: 6rem; }
+}

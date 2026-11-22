@@ -217,6 +217,21 @@
             <input type="range" id="seek-range" min="0" max="100" step="1" value="0" aria-label="全书进度（按字符定位）" />
           </div>
 
+          <!-- 语音来源 + 音色：放在播放键上方常驻可见区（底部区域曾被安装横幅遮住） -->
+          <div class="engine-row">
+            <span class="ctl-label">语音来源</span>
+            <div class="seg seg-compact" id="engine-switch" role="radiogroup" aria-label="语音来源">
+              <button type="button" class="seg-btn" role="radio" aria-checked="true" data-engine="system">系统语音</button>
+              <button type="button" class="seg-btn" role="radio" aria-checked="false" data-engine="cloud">百度语音</button>
+            </div>
+          </div>
+          <div class="engine-row">
+            <span class="ctl-label">音色</span>
+            <select id="voice-select" class="voice-select-inline" aria-label="音色选择"><option value="">默认</option></select>
+            <button type="button" class="btn btn-xs btn-primary" id="btn-voice-preview" aria-label="试听当前音色" title="试听">▶</button>
+            <span class="field-note" id="voice-hint" hidden></span>
+          </div>
+
           <div class="controls">
             <div class="transport" role="group" aria-label="播放控制">
               <button type="button" class="icon-btn ctl" id="btn-prev-ch" aria-label="上一章"><svg class="ic" aria-hidden="true"><use href="#ic-prev-ch"></use></svg></button>
@@ -235,35 +250,33 @@
                 <span class="ctl-label">音量 <output id="vol-val" for="vol-range">100%</output></span>
                 <input type="range" id="vol-range" min="0" max="1" step="0.01" value="1" aria-label="音量" />
               </label>
-              <label class="ctl-field">
-                <span class="ctl-label">音色</span>
-                <div class="voice-row">
-                  <select id="voice-select" aria-label="音色选择"><option value="">默认</option></select>
-                  <button type="button" class="btn btn-xs btn-primary" id="btn-voice-preview" aria-label="试听当前音色" title="试听">▶</button>
+              <details class="ctl-more">
+                <summary>定时关闭 · 书签 · 导出</summary>
+                <div class="ctl-grid">
+                  <label class="ctl-field">
+                    <span class="ctl-label">定时关闭</span>
+                    <select id="sleep-select" aria-label="定时关闭">
+                      <option value="off">关闭</option>
+                      <option value="15">15 分钟</option>
+                      <option value="30">30 分钟</option>
+                      <option value="60">60 分钟</option>
+                      <option value="chapter">读完本章</option>
+                      <option value="custom">自定义…</option>
+                    </select>
+                  </label>
+                  <div class="ctl-actions">
+                    <button type="button" class="btn btn-sm" id="btn-add-mark">
+                      <svg class="ic" aria-hidden="true"><use href="#ic-bookmark"></use></svg><span>加书签</span>
+                    </button>
+                    <button type="button" class="btn btn-sm" id="btn-export-chapter">
+                      <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span>导出本章</span>
+                    </button>
+                    <button type="button" class="btn btn-sm" id="btn-export-book">
+                      <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span>导出全书</span>
+                    </button>
+                  </div>
                 </div>
-              </label>
-              <label class="ctl-field">
-                <span class="ctl-label">定时关闭</span>
-                <select id="sleep-select" aria-label="定时关闭">
-                  <option value="off">关闭</option>
-                  <option value="15">15 分钟</option>
-                  <option value="30">30 分钟</option>
-                  <option value="60">60 分钟</option>
-                  <option value="chapter">读完本章</option>
-                  <option value="custom">自定义…</option>
-                </select>
-              </label>
-              <div class="ctl-actions">
-                <button type="button" class="btn btn-sm" id="btn-add-mark">
-                  <svg class="ic" aria-hidden="true"><use href="#ic-bookmark"></use></svg><span>加书签</span>
-                </button>
-                <button type="button" class="btn btn-sm" id="btn-export-chapter">
-                  <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span>导出本章</span>
-                </button>
-                <button type="button" class="btn btn-sm" id="btn-export-book">
-                  <svg class="ic" aria-hidden="true"><use href="#ic-download"></use></svg><span>导出全书</span>
-                </button>
-              </div>
+              </details>
             </div>
           </div>
         </div>
@@ -362,6 +375,21 @@
           <li><b>手动标记章节：</b>在当前会话内生效并写回书库；重新打开书籍时若正则仍能识别，会按章节正则重新切分。</li>
         </ul>
       </section>
+
+      <!-- PWA 安装引导：放在 main 内（文档流），绝不覆盖正文/播放控件 -->
+      <div class="install-banner" id="install-banner" hidden role="status">
+        <div class="install-banner-content">
+          <span class="install-banner-icon">📱</span>
+          <div class="install-banner-text">
+            <strong>安装「蝈蝈听书」到桌面</strong>
+            <span class="install-banner-sub">全屏体验 · 后台播放更稳 · 一点即开</span>
+          </div>
+        </div>
+        <div class="install-banner-actions">
+          <button type="button" class="btn btn-sm btn-primary" id="btn-install-yes">安装</button>
+          <button type="button" class="btn btn-sm" id="btn-install-no">暂不</button>
+        </div>
+      </div>
     </main>
 
     <!-- 底部常驻播放条 -->
@@ -492,14 +520,19 @@
 
       <section class="set-group">
         <h3 class="set-title">TTS 引擎</h3>
-        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-sherpa" value="local-sherpa" /><span>本地离线 · sherpa-onnx（默认：吐字清晰，Apache-2.0 可商用；单线程合成较慢）</span></label>
-        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-piper" value="local-piper" /><span>本地离线 · Piper 中文（合成快，但真机实测发音清晰度差；含 GPL 组件，仅个人非商业）</span></label>
+        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-system" value="system" /><span>手机自带语音（推荐：华为等机型系统音色最好听，无需下载、不联网、不花钱）</span></label>
+        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-cloud" value="cloud" /><span>百度云端语音（真人音色，可后台/锁屏播放；需联网，按字消耗额度）</span></label>
+        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-sherpa" value="local-sherpa" /><span>本地离线 · sherpa-onnx（可选，默认关闭；首次需下载约 39MB 模型，合成较慢）</span></label>
+        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-piper" value="local-piper" /><span>本地离线 · Piper 中文（可选，默认关闭；合成快但真机发音清晰度差）</span></label>
         <p class="field-note" id="engine-note">默认为 sherpa：真机 A/B 试听实测吐字清晰、听得懂；Piper 虽快但发音质量不达标（x_low 档还缺声调）。两档均为本地合成，文本不出设备（云端 TTS 时文本会发送到服务器）。</p>
       </section>
 
-      <section class="set-group">
-        <h3 class="set-title">模型档位</h3>
-        <div id="tier-sherpa-group">
+      <section class="set-group" id="model-section">
+        <h3 class="set-title">离线模型（可选）</h3>
+        <p class="field-note" id="model-section-hint">
+          当前用系统语音/百度语音，<b>无需下载任何模型</b>。只有选择「本地离线」引擎时才需要下载，入口就在下方。
+        </p>
+        <div id="tier-sherpa-group" hidden>
           <label class="radio-row"><input type="radio" name="model-tier" id="tier-int8" value="int8" /><span>省流档 int8 · 39MB（Apache 可商用）</span></label>
           <label class="radio-row"><input type="radio" name="model-tier" id="tier-full" value="full" /><span>标准档 full · 121MB</span></label>
         </div>
@@ -601,21 +634,6 @@
   <div id="modal-root" class="modal-root"></div>
   <div id="busy-overlay" class="busy-overlay" hidden><div class="busy-box"><span class="spinner" aria-hidden="true"></span><span id="busy-text">处理中…</span></div></div>
 
-  <!-- PWA 安装引导横幅 -->
-  <div class="install-banner" id="install-banner" hidden role="status">
-    <div class="install-banner-content">
-      <span class="install-banner-icon">📱</span>
-      <div class="install-banner-text">
-        <strong>安装「蝈蝈听书」到桌面</strong>
-        <span class="install-banner-sub">全屏体验 · 后台播放更稳 · 一点即开</span>
-      </div>
-    </div>
-    <div class="install-banner-actions">
-      <button type="button" class="btn btn-sm btn-primary" id="btn-install-yes">安装</button>
-      <button type="button" class="btn btn-sm" id="btn-install-no">暂不</button>
-    </div>
-  </div>
-
   <!-- 字号与行距调节面板 -->
   <div class="font-panel" id="font-panel" hidden role="dialog" aria-label="字号与行距">
     <div class="font-panel-inner">
@@ -654,6 +672,27 @@
       var deferred = null;
       var banner = document.getElementById('install-banner');
       if (!banner) return;
+
+      // 安装横幅是 fixed 覆盖层，会盖住阅读页底部的「音色 / 定时关闭」一行。
+      // 显示时给页面留出等高位、并在 20 秒后自动收起（用户只要不点就会一直挡着）。
+      var autoHideTimer = 0;
+      var syncBannerClass = function () {
+        var visible = !banner.hidden;
+        document.body.classList.toggle('has-install-banner', visible);
+        if (visible && !autoHideTimer) {
+          autoHideTimer = setTimeout(function () {
+            autoHideTimer = 0;
+            if (!banner.hidden) banner.hidden = true;
+          }, 20000);
+        } else if (!visible && autoHideTimer) {
+          clearTimeout(autoHideTimer);
+          autoHideTimer = 0;
+        }
+      };
+      try {
+        new MutationObserver(syncBannerClass).observe(banner, { attributes: true, attributeFilter: ['hidden'] });
+      } catch (e) { /* 老内核无 MutationObserver：退化为不预留空间 */ }
+      syncBannerClass();
 
       // iOS Safari 不触发 beforeinstallprompt → 显示手动引导
       var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||

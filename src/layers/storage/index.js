@@ -200,7 +200,7 @@ export async function listAllMarks() {
  *     x_low 档还额外缺声调），sherpa 吐字清晰。听得懂 > 流畅；速度问题由
  *     Worker（界面不卡）+ 云端 TTS（后续）解决。
  */
-const SETTINGS_VERSION = 3;
+const SETTINGS_VERSION = 4;
 
 export const DEFAULT_SETTINGS = Object.freeze({
   rate: 1.0,
@@ -216,9 +216,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   normalizeNumbers: true,
   dialogueVoice: false,
   dialogueVoiceId: null,
-  cloudTtsEnabled: true, // 默认启用云端（百度真人音色）；显式关闭则回落本地
+  cloudTtsEnabled: false, // 百度云端默认关闭（默认用手机自带语音）
   cloudEndpoint: '', // 留空 → 自动使用同域 /api/tts（Pages Functions）
-  ttsEngine: 'local-sherpa', // v3 默认：吐字清晰（真机 A/B 实测 Piper 发音不可懂）
+  ttsEngine: 'system', // v4 默认：用手机自带语音（华为等机型系统音色最好听）；百度/本地按需选
   settingsVersion: SETTINGS_VERSION,
   sherpaTier: 'int8',        // int8 ~39MB（默认）/ full ~121MB
   chunkSeconds: 30, // 单块目标时长（秒）；播放器另把「首块」压到 8 秒内以便秒出声
@@ -237,15 +237,12 @@ export async function getSettings() {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
   // 注：所有设备默认 medium —— 实测 x_low 词表(130)没有声调数字键，声调符号会被
   // 丢弃导致发音缺损（"听不懂"），省流量不能牺牲听得懂，故不做移动端降档。
-  // v2→v3 迁移：真机试听实测 Piper 发音不可懂（"鸟语"）→ 统一切回 sherpa（吐字清晰）。
-  // 区分不了「旧默认 piper」与「显式选过 piper」——应用刚上线、sherpa 已就绪即用，
-  // Piper 可随时在设置里手动切回（标签已注明其发音问题）。
+  // v3→v4 迁移：真机反馈「手机自带语音最好听，连语音包反而难听」。
+  // 统一改成默认=系统语音、百度关闭；本地 sherpa/Piper 保留为可选（默认不下载模型）。
+  // 这是一次性重置：用户随时可在阅读页「语音来源」里切回百度或本地。
   if (raw && (raw.settingsVersion == null || raw.settingsVersion < SETTINGS_VERSION)) {
-    if (raw.settingsVersion == null && raw.ttsEngine === 'local-sherpa') {
-      // v1 行本来就是 sherpa，仅补版本号
-    } else if (raw.ttsEngine === 'local-piper') {
-      merged.ttsEngine = 'local-sherpa';
-    }
+    merged.ttsEngine = 'system';
+    merged.cloudTtsEnabled = false;
     merged.settingsVersion = SETTINGS_VERSION;
     const t2 = db.transaction('settings', 'readwrite');
     t2.objectStore('settings').put({ key: 'app', value: merged });

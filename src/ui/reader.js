@@ -96,8 +96,19 @@ export function createPlayerView(ctx) {
     syncAll();
     updateModelBanner();
     void refreshVoices();
+    syncEngineUI();
     updateSleepQuick();
     void ctx.refreshMarks();
+  }
+
+  /** 同步「语音来源」按钮的选中态（系统语音 / 百度语音）。 */
+  function syncEngineUI() {
+    const el = $('#engine-switch');
+    if (!el) return;
+    const cur = app.getSettings().ttsEngine || 'system';
+    for (const b of el.querySelectorAll('[data-engine]')) {
+      b.setAttribute('aria-checked', String(b.dataset.engine === cur));
+    }
   }
 
   /** 当前句所属章节下标（按字符区间判定，章节微调后依然正确）。 */
@@ -434,6 +445,7 @@ export function createPlayerView(ctx) {
     const engineId = app.registry && app.registry.active ? app.registry.active.id : '';
     if (engineId && engineId !== lastVoiceEngine) {
       lastVoiceEngine = engineId;
+      syncEngineUI();
       void refreshVoices();
     }
     if ('sleep' in patch) updateSleepUI(patch.sleep);
@@ -451,33 +463,37 @@ export function createPlayerView(ctx) {
 
   /* ================= 模型横幅 ================= */
 
+  /**
+   * 模型横幅：只在「本地离线引擎」真正需要模型时出现（下载中 / 初始化中 / 出错）。
+   * v4 起默认是系统语音，不再自动下载任何模型——原来的"正在自动下载…"文案是假的，必须去掉。
+   * 下载入口只保留在设置页（离线模型区）。
+   */
   function updateModelBanner() {
-    const ms = app.modelState();
     const settings = app.getSettings();
-    // 档位文案按当前引擎区分（sherpa 默认档 / piper 可选档）
-    const usePiper = settings.ttsEngine === 'local-piper';
+    const engine = settings.ttsEngine || 'system';
+    const isLocal = engine === 'local-sherpa' || engine === 'local-piper';
+    const ms = app.modelState();
+    const activeId = app.registry && app.registry.active ? app.registry.active.id : '';
+
+    if (!isLocal) {
+      banner.hidden = true;
+      return;
+    }
+
+    const usePiper = engine === 'local-piper';
     const tierLabel = usePiper
       ? (settings.modelTier === 'x_low' ? 'Piper 省流档 21MB' : 'Piper 标准档 63MB')
       : (settings.sherpaTier === 'full' ? '标准档 121MB' : '省流档 39MB');
-    const activeId = app.registry && app.registry.active ? app.registry.active.id : '';
-    const isPreview = activeId === 'speech-preview';
-    const cloudOn = !!settings.cloudTtsEnabled;
     const downloading = ms.status === 'downloading';
     const error = ms.status === 'error';
     const warmingUp = !downloading && !error && ms.status === 'ready' && activeId === 'speech-preview';
-    // 引擎预热中（文件已下载但 wasm+模型还在初始化，正在用系统语音兜底）
-    // 回退态：设置选的引擎模型没就绪，但正在用另一个本地引擎（如手机上 Piper 未下载、临时用 sherpa）
-    const fallback = !cloudOn && !isPreview && !downloading && !error && ms.status !== 'ready';
-    // 真预览态：没有任何本地引擎可用，走系统朗读（锁屏会断）
-    const preview = !cloudOn && isPreview;
-    const show = downloading || preview || fallback || error || warmingUp;
+    const needDownload = !downloading && !error && !warmingUp && ms.status !== 'ready';
 
-    banner.hidden = !show;
-    banner.classList.toggle('is-preview', (preview || fallback) && !downloading);
+    banner.hidden = !(downloading || error || warmingUp || needDownload);
+    banner.classList.remove('is-preview');
     bannerTrack.hidden = !downloading;
 
     if (downloading) {
-      // 时间估计：根据已用时和进度推算剩余时间（规则：显示约等多久）
       const elapsed = ms.startTime ? (Date.now() - ms.startTime) / 1000 : 0;
       let eta = '';
       if (ms.progress > 2 && elapsed > 1) {
@@ -485,27 +501,22 @@ export function createPlayerView(ctx) {
         if (remaining > 60) eta = `，预计还需 ${Math.ceil(remaining / 60)} 分钟`;
         else if (remaining > 0) eta = `，预计还需 ${remaining} 秒`;
       }
-      const isAuto = isPreview; // 自动下载时正在用系统语音兜底
-      bannerText.textContent = `⏳ 正在自动下载${tierLabel}（${ms.progress}%）${eta} —— ${isAuto ? '正在用系统语音先听，' : ''}只需下载一次，以后无需再下载。可离开本页，进度不会丢。`;
+      bannerText.textContent = `⏳ 正在下载${tierLabel}（${ms.progress}%）${eta} —— 下载期间用系统语音先听，只需下载一次。`;
       bannerBar.style.width = `${ms.progress}%`;
       downloadText.textContent = `${ms.progress}%`;
       $('#btn-download-model').disabled = true;
     } else if (warmingUp) {
-      bannerText.textContent = '🎙️ 正在初始化语音引擎…（约 5~15 秒）—— 正在用系统语音先听，完成后自动切换到高质量语音';
+      bannerText.textContent = '🎙️ 正在初始化本地语音引擎…（约 5~15 秒）—— 先用系统语音朗读，完成后自动切换';
       downloadText.textContent = '初始化中…';
       $('#btn-download-model').disabled = true;
     } else if (error) {
-      bannerText.textContent = `❌ 语音模型下载失败：${ms.error || '未知错误'}。当前用系统语音朗读（锁屏会中断），点右侧按钮重试下载（只需一次）。`;
+      bannerText.textContent = `❌ 本地模型下载失败：${ms.error || '未知错误'}。当前用系统语音朗读，可点右侧重试。`;
       downloadText.textContent = '重试下载';
       $('#btn-download-model').disabled = false;
-    } else if (fallback) {
-      const activeLabel = (app.registry.active && app.registry.active.label) || '备用引擎';
-      bannerText.textContent = `⚠️ ${tierLabel} 尚未就绪，正在用「${activeLabel}」（较慢）——正在自动下载${tierLabel}，完成后自动切换高质量语音（只需下载一次）`;
+    } else if (needDownload) {
+      // 用户显式选了本地引擎但模型还没下：给一个明确按钮（设置页也有）
+      bannerText.textContent = `离线引擎需要先下载${tierLabel}（${tierLabel.includes('121') ? '较大' : '约 39~63MB'}），当前用系统语音先听。`;
       downloadText.textContent = `下载 ${tierLabel}`;
-      $('#btn-download-model').disabled = false;
-    } else if (preview) {
-      bannerText.textContent = '🎙️ 当前用系统语音朗读（立即出声，锁屏会中断）——正在自动下载高质量语音模型，完成后自动切换（只需下载一次）';
-      downloadText.textContent = '下载模型';
       $('#btn-download-model').disabled = false;
     }
   }
@@ -676,6 +687,26 @@ export function createPlayerView(ctx) {
     const wanted = settings.voice || '';
     voiceSelect.value = wanted;
     if (voiceSelect.value !== wanted) voiceSelect.value = '';
+
+    // 音色行自适应：没有可选音色时不要给一个"只有默认"的空下拉（用户会以为选了没作用）
+    const total = groups.reduce((n, g) => n + g.voices.length, 0);
+    const previewBtn = $('#btn-voice-preview');
+    const hint = $('#voice-hint');
+    const engine = app.getSettings().ttsEngine || 'system';
+    if (total === 0) {
+      voiceSelect.hidden = true;
+      if (previewBtn) previewBtn.hidden = true;
+      if (hint) {
+        hint.hidden = false;
+        hint.textContent = engine === 'system'
+          ? '系统语音未提供音色列表，可在手机「设置 → 语音合成」里更换默认发音人'
+          : '当前引擎没有可选音色';
+      }
+    } else {
+      voiceSelect.hidden = false;
+      if (previewBtn) previewBtn.hidden = false;
+      if (hint) hint.hidden = true;
+    }
   }
 
   /* ================= 控制绑定 ================= */
@@ -754,11 +785,37 @@ export function createPlayerView(ctx) {
     void app.updateSettings({ volume: Number(volRange.value) });
   });
 
+  // 系统语音的音色列表是异步填充的（Chrome 首次 getVoices() 为空，会触发 voiceschanged）
+  if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.addEventListener) {
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      const eng = app.getSettings().ttsEngine || 'system';
+      if (eng === 'system') void refreshVoices();
+    });
+  }
+
   voiceSelect.addEventListener('change', () => {
     const id = voiceSelect.value || null;
     player.setVoice(id);
     void app.updateSettings({ voice: id });
   });
+
+  // 语音来源切换（系统语音 / 百度语音）——常驻可见，手机上也能点到
+  const engineSwitch = $('#engine-switch');
+  if (engineSwitch) {
+    engineSwitch.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('[data-engine]') : null;
+      if (!btn) return;
+      const engine = btn.dataset.engine;
+      const cur = app.getSettings().ttsEngine || 'system';
+      if (engine === cur) return;
+      void (async () => {
+        await app.updateSettings({ ttsEngine: engine });
+        syncEngineUI();
+        ctx.toast(engine === 'cloud' ? '已切换到百度语音' : '已切换到手机自带语音', 'success');
+        ctx.onVoicesChanged();
+      })();
+    });
+  }
 
   sleepSelect.addEventListener('change', () => void onSleepSelect());
 
