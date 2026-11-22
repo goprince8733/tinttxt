@@ -503,12 +503,23 @@ export function createSettings(ctx) {
         const res = await bridge.checkForUpdate();
         if (res && res.hasUpdate) {
           if (status) status.textContent = '发现新版本，正在更新…';
-          // 直接激活并刷新（与「刷新」按钮同一路径）
-          try {
-            ctx.toast('发现新版本，正在更新…', 'info');
-            bridge.skipWaiting();
-            setTimeout(() => location.reload(), 1200);
-          } catch { /* ignore */ }
+          ctx.toast('发现新版本，正在更新…', 'info');
+          const reg = window.__SW_BRIDGE__ && window.__SW_BRIDGE__.registration;
+          if (reg && reg.waiting) {
+            // 新 SW 已就绪：先让它接管再刷新
+            let reloaded = false;
+            const doReload = () => {
+              if (reloaded) return;
+              reloaded = true;
+              try { location.reload(); } catch { /* ignore */ }
+            };
+            window.addEventListener('__SW_CONTROLLING__', doReload, { once: true });
+            try { bridge.skipWaiting(); } catch { /* ignore */ }
+            setTimeout(doReload, 3000);
+          } else {
+            // 新 SW 没进 waiting（安装被节流/中断）：硬重置——注销 SW + 清 SW 缓存 + 刷新
+            await bridge.hardUpdate();
+          }
         } else {
           const v = app.getBuildInfo ? app.getBuildInfo().build : 'dev';
           if (status) status.textContent = `已是最新版本（${v}）`;

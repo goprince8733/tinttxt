@@ -74,6 +74,14 @@
     if (reg.waiting && window.navigator.serviceWorker.controller) notify();
   }
 
+  /** 页面自身的构建号（部署时注入 meta）；用它给 SW 脚本 URL 加版本查询串。 */
+  function pageBuild() {
+    try {
+      var m = document.querySelector('meta[name="app-build"]');
+      return m && m.content ? m.content : '';
+    } catch (e) { return ''; }
+  }
+
   function register() {
     if (!bridge.supported) return Promise.resolve(null);
     if (!window.isSecureContext) {
@@ -81,11 +89,17 @@
       return Promise.resolve(null);
     }
     if (bridge.registration) return Promise.resolve(bridge.registration);
+    var v = pageBuild();
+    // 关键：SW 脚本 URL 带构建号。部署后构建号变 → URL 变 → 浏览器必然安装新 SW，
+    // 不受"更新检查节流"影响（reg.update() 会被浏览器节流，实测经常不生效）。
+    var url = '/sw.js' + (v ? '?v=' + encodeURIComponent(v) : '');
     return window.navigator.serviceWorker
-      .register('/sw.js', { scope: '/' })
+      .register(url, { scope: '/' })
       .then(function (reg) {
         bridge.registration = reg;
         watchUpdates(reg);
+        // 主动问一次当前 SW 的版本号（供 checkForUpdate 比对）
+        try { if (reg.active) reg.active.postMessage({ type: 'GET_VERSION' }); } catch (e) { /* ignore */ }
         return reg;
       })
       .catch(function (err) {
@@ -109,6 +123,7 @@
         bridge.updated = true;
         dispatch('__SW_UPDATE__', { version: data.version });
       } else if (data.type === 'VERSION') {
+        bridge.activeVersion = data.version || '';
         dispatch('__SW_VERSION__', { version: data.version });
       }
     });
@@ -116,6 +131,11 @@
     // 新 SW 首次接管当前页面（skipWaiting + clients.claim 之后）
     window.navigator.serviceWorker.addEventListener('controllerchange', function () {
       dispatch('__SW_CONTROLLING__');
+      // 新 SW 接管后刷新一次版本号
+      try {
+        var reg = bridge.registration;
+        if (reg && reg.active) reg.active.postMessage({ type: 'GET_VERSION' });
+      } catch (e) { /* ignore */ }
     });
   }
 
@@ -136,37 +156,47 @@
     window.dispatchEvent(new CustomEvent('__SW_SKIP_WAITING__'));
   };
 
+
   /**
-   * 主动检查更新：resolve { supported, hasUpdate }。
-   * 新 SW 需要下载并预缓存（1~2MB），所以这里用轮询等最多 15 秒，
-   * 不能像早先那样只等 2.5 秒（会误报"已最新"）。
+   * 兜底更新：注销所有 SW + 清掉 SW 自管缓存 + 刷新。
+   * 用于"确实有新版本，但新 SW 迟迟没进 waiting"的情况（安装被节流/中断）。
+   * 只清 tinttxt-precache-/tinttxt-runtime-，不碰 TTS 模型缓存与书库。
+   */
+  bridge.hardUpdate = function () {
+    var p = bridge.supported && window.navigator.serviceWorker.getRegistrations
+      ? window.navigator.serviceWorker.getRegistrations().then(function (regs) {
+          return Promise.all(regs.map(function (r) { return r.unregister().catch(function () {}); }));
+        })
+      : Promise.resolve();
+    return p
+      .catch(function () {})
+      .then(function () { return caches.keys().catch(function () { return []; }); })
+      .then(function (names) {
+        var targets = (names || []).filter(function (n) {
+          return n.indexOf('tinttxt-precache-') === 0 || n.indexOf('tinttxt-runtime-') === 0;
+        });
+        return Promise.all(targets.map(function (n) { return caches.delete(n).catch(function () {}); }));
+      })
+      .catch(function () {})
+      .then(function () { try { location.reload(); } catch (e) { /* ignore */ } });
+  };
+
+  /**
+   * 主动检查更新：resolve { supported, hasUpdate, deployed }。
+   * 判断依据是线上 /build-info.json 的构建号 vs 页面自身构建号（meta），
+   * 纯网络比对，不受 reg.update() 节流与安装时机影响，结果确定。
    */
   bridge.checkForUpdate = function () {
     if (!bridge.supported) return Promise.resolve({ supported: false, hasUpdate: false });
-    var reg = bridge.registration;
-    if (!reg) return Promise.resolve({ supported: true, hasUpdate: false });
-    return new Promise(function (resolve) {
-      var done = false;
-      var poll = 0;
-      var timer = 0;
-      function finish(hasUpdate) {
-        if (done) return;
-        done = true;
-        clearInterval(poll);
-        clearTimeout(timer);
-        resolve({ supported: true, hasUpdate: !!hasUpdate });
-      }
-      function check() {
-        try {
-          if (reg.waiting) return finish(true);
-          var inst = reg.installing;
-          if (inst && inst.state === 'installed' && window.navigator.serviceWorker.controller) return finish(true);
-        } catch (e) { /* ignore */ }
-      }
-      poll = setInterval(check, 300);
-      timer = setTimeout(function () { finish(false); }, 15000);
-      Promise.resolve(reg.update()).then(check).catch(function () { /* 网络失败：等超时 */ });
-    });
+    var current = pageBuild() || bridge.activeVersion || '';
+    return fetch('/build-info.json', { cache: 'no-store' })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (info) {
+        var deployed = (info && info.build) || '';
+        var hasUpdate = !!(deployed && current && deployed !== current);
+        return { supported: true, hasUpdate: hasUpdate, deployed: deployed, current: current, waiting: !!(bridge.registration && bridge.registration.waiting) };
+      });
   };
 
   // 回到前台时自动检查一次（10 分钟节流），让手机上不必手动刷新

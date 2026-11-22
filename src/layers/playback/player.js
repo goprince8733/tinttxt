@@ -599,6 +599,9 @@ export function createPlayer(deps) {
       activeEl.pause();
     }
     currentChunk = chunk;
+    // 块切换必须记在最前面：系统语音（preview）在下面会提前 return，
+    // 原来把日志放在后面导致"跳块"恰恰没被记录（诊断失效）。
+    trace({ kind: 'chunk', idx: chunk.index, preview: !!chunk.preview, from: opts.startSentence != null ? opts.startSentence : null, chunkStart: chunk.sentenceStart, chunkEnd: chunk.sentenceEnd });
     // 规则5：单元素，无 A/B 切换
     const el = activeEl;
     attachListeners(el);
@@ -622,7 +625,6 @@ export function createPlayer(deps) {
     }
 
     if (el.src !== chunk.url) el.src = chunk.url;
-    trace({ kind: 'chunk', idx: chunk.index, preview: !!chunk.preview, from: opts.startSentence != null ? opts.startSentence : null });
 
     // 定位到句
     let seekTo = 0;
@@ -759,7 +761,9 @@ export function createPlayer(deps) {
     if (wantPlaying) startKeepAlive(); // 从跳句/续播进入系统语音时也保活
     const gen = ++previewGen;
     previewChunkRef = chunk;
-    previewResumeIdx = -1; // 新一轮朗读：清掉上次的断点（真正的断点由 suspendHere 记录）
+    previewResumeIdx = -1; // 新一轮朗读：清掉上次断点（真正的断点由 handleInterrupted 记录）
+    retryState.i = -1; // 新会话重置重试计数（否则"重念同一句"的计数会跨会话残留）
+    retryState.n = 0;
     let i = Math.max(chunk.sentenceStart, Math.min(startIdx, chunk.sentenceEnd - 1));
 
     const stopIfStale = () => destroy || gen !== previewGen || !wantPlaying;
