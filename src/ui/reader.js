@@ -693,26 +693,19 @@ export function createPlayerView(ctx) {
     voiceSelect.value = wanted;
     if (voiceSelect.value !== wanted) voiceSelect.value = '';
 
-    // 音色行自适应：没有可选音色时不要给一个"只有默认"的空下拉（用户会以为选了没作用）
+    // 音色行自适应：没有可选音色时整行隐藏（系统语音不暴露列表，用户也换不了；
+    // 指引放在设置→TTS 引擎里，避免播放页多一行看不懂的提示）
     const total = groups.reduce((n, g) => n + g.voices.length, 0);
     const previewBtn = $('#btn-voice-preview');
-    const hint = $('#voice-hint');
-    const engine = app.getSettings().ttsEngine || 'system';
+    const voiceRow = $('#voice-row');
     if (total === 0) {
       voiceSelect.hidden = true;
       if (previewBtn) previewBtn.hidden = true;
-      if (hint) {
-        hint.hidden = false;
-        // 注意：不同华为机型/系统版本的菜单名不一样（EMUI / HarmonyOS 有差异），
-        // 所以给出「设置里搜索」这个通用做法，不再写死一个可能不存在的菜单路径。
-        hint.textContent = engine === 'system'
-          ? '手机没有把可选音色开放给网页，当前用系统默认发音人。想换发音人：手机「设置」里搜索「文字转语音」或「TTS」'
-          : '当前引擎没有可选音色';
-      }
+      if (voiceRow) voiceRow.hidden = true;
     } else {
       voiceSelect.hidden = false;
       if (previewBtn) previewBtn.hidden = false;
-      if (hint) hint.hidden = true;
+      if (voiceRow) voiceRow.hidden = false;
     }
   }
 

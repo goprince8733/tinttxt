@@ -213,11 +213,10 @@
               <button type="button" class="seg-btn" role="radio" aria-checked="false" data-engine="cloud">百度语音</button>
             </div>
           </div>
-          <div class="engine-row">
+          <div class="engine-row" id="voice-row">
             <span class="ctl-label">音色</span>
             <select id="voice-select" class="voice-select-inline" aria-label="音色选择"><option value="">默认</option></select>
             <button type="button" class="btn btn-xs btn-primary" id="btn-voice-preview" aria-label="试听当前音色" title="试听">▶</button>
-            <span class="field-note" id="voice-hint" hidden></span>
           </div>
 
           <div class="controls">
@@ -512,7 +511,7 @@
       <section class="set-group" id="model-section">
         <h3 class="set-title">离线模型（可选）</h3>
         <p class="field-note" id="model-section-hint">
-          当前用系统语音/百度语音，<b>无需下载任何模型</b>。只有选择「本地离线」引擎时才需要下载，入口就在下方。
+          当前不用本地离线引擎，<b>无需下载任何模型</b>。只有选择「本地离线」引擎时才需要下载，入口就在下方。
         </p>
         <div id="tier-sherpa-group" hidden>
           <label class="radio-row"><input type="radio" name="model-tier" id="tier-int8" value="int8" /><span>省流档 int8 · 39MB（Apache 可商用）</span></label>
@@ -576,18 +575,13 @@
         <h3 class="set-title">关于</h3>
         <p class="about-text">
           蝈蝈听书 · 版本 <span id="app-build">（未标记）</span><br />
-          纯前端离线听书：断句 / 章节 / TTS / 播放分层架构，音频经真实 &lt;audio&gt; 播放以获得系统后台豁免。<br />
-          本地模型与运行时全部自托管，本地合成时文本不出设备；无任何第三方 CDN 依赖，离线可开。<br />
+          离线听书，朗读文本不出设备。<br />
           作者邮箱：<a href="mailto:13300255@qq.com">13300255@qq.com</a>
         </p>
         <div class="btn-row">
           <button type="button" class="btn btn-sm" id="btn-check-update">检查更新</button>
           <span class="field-note" id="update-status" role="status" aria-live="polite"></span>
         </div>
-        <p class="field-note">
-          排查问题时请把上面的版本号发给我——它能确认你手机上跑的是不是最新代码
-          （浏览器缓存有时会让你停留在旧版本）。
-        </p>
       </section>
     </div>
   </aside>
