@@ -85,6 +85,7 @@ const PRECACHE_URLS = [
   '/styles/layout.css',
   '/styles/components.css',
   '/styles/views.css',
+  '/styles/hidden.css',
   // —— 图标 ——
   '/icons/icon-192.png',
   '/icons/icon-512.png',

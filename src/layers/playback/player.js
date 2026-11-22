@@ -769,9 +769,12 @@ export function createPlayer(deps) {
    */
   let speechRateCps = 4.5;
   const rateSamples = [];
-  function noteSpeechRate(chars, ms) {
+  function noteSpeechRate(chars, ms, rate) {
     if (!(ms > 700) || !(chars >= 4)) return;
-    const cps = chars / (ms / 1000);
+    // 归一化到 1× 语速：样本里已包含当前倍速，若不除掉会和 expectedMs 再乘一次倍速，
+    // 造成 2× 时预期时长被除以两次（阈值被放大一倍，截断再也检测不到）。
+    const r = rate > 0 ? rate : 1;
+    const cps = chars / (ms / 1000) / r;
     if (!(cps > 1.5 && cps < 12)) return;
     rateSamples.push(cps);
     if (rateSamples.length > 30) rateSamples.shift();
@@ -840,7 +843,8 @@ export function createPlayer(deps) {
 
       let spoke = false;
       const speakT0 = Date.now();
-      const expectedMs = Math.max(500, (s.speak.length / (speechRateCps * (state.rate || 1))) * 1000);
+      const speakRate = state.rate || 1;
+      const expectedMs = Math.max(500, (s.speak.length / (speechRateCps * speakRate)) * 1000);
       const isHidden = () => {
         try { return document.visibilityState === 'hidden'; } catch { return false; }
       };
@@ -916,7 +920,7 @@ export function createPlayer(deps) {
         trace({ kind: 'end', idx: i, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), cps: elapsed > 300 ? Number((s.speak.length / (elapsed / 1000)).toFixed(1)) : null, spoke, hidden: isHidden(), chunk: chunk.index });
         if (suspiciousEnd(elapsed)) { handleInterrupted(spoke ? 'short-end' : 'no-start-end', elapsed); return; }
         // 正常结束：累计本块"应有/实际"时长，并学习真实语速
-        noteSpeechRate(s.speak.length, elapsed);
+        noteSpeechRate(s.speak.length, elapsed, speakRate);
         chunkStat.expected += expectedMs;
         chunkStat.spoken += elapsed;
         i += 1;
