@@ -347,7 +347,16 @@ async function writeOwnerKeyToKv(creds) {
       headers: { authorization: `Bearer ${creds.token}`, 'content-type': 'text/plain' },
       body: key,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 160)}`);
+    if (!res.ok) {
+      const body = (await res.text()).slice(0, 200);
+      // 429 = KV 每日写入额度用尽。若 KV 里已有旧密钥，闸门依然有效（只是没轮换），
+      // 此时不该因为配额问题把整个部署卡死（否则站点永远更新不了）。
+      if (res.status === 429 && cur) {
+        log('⚠ KV 写入额度用尽：保留 KV 中已有密钥，继续部署（闸门仍生效）');
+        return;
+      }
+      throw new Error(`HTTP ${res.status} ${body}`);
+    }
     log('云端语音密钥已写入 KV（未携带密钥的请求会被 403 拒绝）');
   } catch (e) {
     // 写入失败 = 闸门可能没生效（任何人仍可用百度语音并消耗额度）→ 必须让部署失败，

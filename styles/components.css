@@ -614,7 +614,8 @@ input[type="radio"] {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.55rem 0;
+  min-height: var(--tap);
+  padding: 0.35rem 0;
   user-select: none;
 }
 .set-advanced > summary::-webkit-details-marker { display: none; }
