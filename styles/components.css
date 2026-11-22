@@ -347,6 +347,9 @@ input[type="radio"] {
 .ctl-more > summary::before { content: '▸ '; }
 .ctl-more[open] > summary::before { content: '▾ '; }
 .ctl-more > .ctl-grid { margin-top: 0.45rem; }
+/* 展开时自动滚入视野要留出底部 tabbar 的高度，否则最后一行会贴着/钻到 tabbar 下面 */
+.ctl-more .btn,
+.ctl-more .ctl-grid { scroll-margin-bottom: calc(var(--tabbar-h) + 0.75rem); }
 
 
 /* ---------------- 徽标 / 状态 ---------------- */
@@ -603,6 +606,21 @@ input[type="radio"] {
   border-bottom: 1px solid var(--border);
 }
 .set-group:last-child { border-bottom: 0; }
+
+/* 高级设置折叠区（由 settings.js 运行时把低频分组搬进来） */
+.set-advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0;
+  user-select: none;
+}
+.set-advanced > summary::-webkit-details-marker { display: none; }
+.set-advanced > summary::before { content: '▸'; color: var(--text-muted); }
+.set-advanced[open] > summary::before { content: '▾'; }
+.set-advanced > .set-group { border-bottom: 0; padding-bottom: 0.7rem; }
 
 .set-title {
   font-size: 0.8rem;

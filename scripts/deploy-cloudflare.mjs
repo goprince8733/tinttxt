@@ -333,8 +333,16 @@ async function writeOwnerKeyToKv(creds) {
       return;
     }
     const key = await loadOrCreateOwnerKey();
-    const url = `https://api.cloudflare.com/client/v4/accounts/${creds.account}/storage/kv/namespaces/${m[1]}/values/${encodeURIComponent('config:cloud-owner-key')}`;
-    const res = await fetch(url, {
+    const valueUrl = `https://api.cloudflare.com/client/v4/accounts/${creds.account}/storage/kv/namespaces/${m[1]}/values/${encodeURIComponent('config:cloud-owner-key')}`;
+    // 先读：值相同就跳过写入。KV 免费档每天只有 1000 次写，部署脚本不该每次都写。
+    const cur = await fetch(valueUrl, { headers: { authorization: `Bearer ${creds.token}` } })
+      .then((r) => (r.ok ? r.text() : null))
+      .catch(() => null);
+    if (cur && cur.trim() === key) {
+      log('云端语音密钥已存在且一致（跳过写入，节省 KV 写额度）');
+      return;
+    }
+    const res = await fetch(valueUrl, {
       method: 'PUT',
       headers: { authorization: `Bearer ${creds.token}`, 'content-type': 'text/plain' },
       body: key,

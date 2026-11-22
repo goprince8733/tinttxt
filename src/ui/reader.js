@@ -910,6 +910,20 @@ export function createPlayerView(ctx) {
   $('#btn-export-chapter').addEventListener('click', () => void exportAudio('chapter'));
   $('#btn-export-book').addEventListener('click', () => void exportAudio('book'));
 
+  /* ================= 更多控件（定时/书签/导出） ================= */
+  // 展开后若超出可视区（矮屏机型），自动把它滚进视野，避免"只显示一半"
+  const ctlMoreEl = document.querySelector('.ctl-more');
+  if (ctlMoreEl) {
+    ctlMoreEl.addEventListener('toggle', () => {
+      if (!ctlMoreEl.open) return;
+      const first = ctlMoreEl.querySelector('.btn, button');
+      if (!first) return;
+      requestAnimationFrame(() => {
+        try { first.scrollIntoView({ block: 'nearest' }); } catch { /* ignore */ }
+      });
+    });
+  }
+
   /* ================= 本书操作 ================= */
   // 正文区的「⋯」下拉菜单已移除：窄屏时该行会换行把它挤到左边，
   // 菜单以 right:0 展开，左半截跑到屏幕外（看起来"空盒子"），还白占一行高度。

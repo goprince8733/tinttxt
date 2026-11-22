@@ -635,15 +635,22 @@ body[data-route="player"] #app {
 body[data-route="player"] #main { min-height: 0; }
 body[data-route="player"] .mini-player { display: none; }
 
+/* 控制区不得内部裁切：``.controls`` 全局有 max-height:45vh + overflow:auto，
+   展开「定时/书签/导出」时那一行正好落在裁切区外（看起来只显示一半）。
+   播放页改为按内容完整展开，整页可滚，保证任何一行都能看到。 */
+body[data-route="player"] .controls {
+  max-height: none;
+  overflow: visible;
+}
+body[data-route="player"] .view-player {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* ================= 矮屏护栏（≤700px 高，如 360x640 老机型） =================
-   安装横幅现在在文档流里，会占掉一截高度；矮屏上宁可暂不展示安装引导，
-   并把 HUD 限高为可滚动，保证播放键/语速/音量/音色永远可达。 */
+   安装横幅现在在文档流里，会占掉一截高度；矮屏上宁可暂不展示安装引导。
+   HUD 也不再限高（限高会把展开后的折叠区裁掉），改为整页滚动。 */
 @media (max-height: 700px) {
   .install-banner { display: none; }
-  body[data-route="player"] .hud {
-    max-height: 48vh;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
   body[data-route="player"] .reader-scroll { min-height: 6rem; }
 }

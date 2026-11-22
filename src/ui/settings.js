@@ -601,6 +601,44 @@ export function createSettings(ctx) {
     ctx.toast(chkWakelock.checked ? '已开启保持亮屏' : '已关闭保持亮屏', 'info');
   });
 
+  /* 高级设置分组：把低频/技术项收进一个折叠区（默认收起），避免普通用户分心。
+     内容：跳行规则 / 章节识别 / 离线模型 / 自定义音色 / 本书操作。
+     引擎选择、外观、朗读、关于仍保持常显。 */
+  (function groupAdvanced() {
+    const about = document.getElementById('sec-about');
+    if (!about || document.getElementById('advanced-settings')) return;
+    const det = document.createElement('details');
+    det.className = 'set-group set-advanced';
+    det.id = 'advanced-settings';
+    const sum = document.createElement('summary');
+    sum.className = 'set-title';
+    sum.textContent = '高级设置（一般不用改）';
+    det.appendChild(sum);
+
+    // 朗读里的技术开关（朗读标点 / 数字正则化 / 对话音色）也收进来：
+    // 普通用户只需要语速、音量、保持亮屏。
+    const detailSec = document.createElement('section');
+    detailSec.className = 'set-group';
+    const dTitle = document.createElement('h3');
+    dTitle.className = 'set-title';
+    dTitle.textContent = '朗读细节';
+    detailSec.appendChild(dTitle);
+    for (const id of ['chk-punct', 'chk-numbers', 'chk-dialogue']) {
+      const box = document.getElementById(id);
+      const row = box ? box.closest('.switch-row') : null;
+      if (row) detailSec.appendChild(row);
+    }
+    const dNote = document.getElementById('dialogue-note');
+    if (dNote) detailSec.appendChild(dNote);
+    det.appendChild(detailSec);
+
+    for (const id of ['sec-jump', 'sec-chapters', 'model-section', 'sec-custom-voice', 'book-actions-group']) {
+      const el = document.getElementById(id);
+      if (el) det.appendChild(el);
+    }
+    about.parentNode.insertBefore(det, about);
+  })();
+
   $('#btn-settings-close').addEventListener('click', () => ctx.router.go(`#${ctx.router.prevView()}`));
 
   return { open, close, isOpen, syncFromSettings, syncBackdrop, applyTheme, refreshDialogueNote, refreshCustomVoices };
