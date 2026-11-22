@@ -165,19 +165,6 @@
           <button type="button" class="icon-btn" id="btn-bookmarks" aria-label="打开书签列表">
             <svg class="ic" aria-hidden="true"><use href="#ic-bookmark"></use></svg>
           </button>
-          <div class="more-wrap">
-            <button type="button" class="icon-btn" id="btn-more" aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">
-              <svg class="ic" aria-hidden="true"><use href="#ic-more"></use></svg>
-            </button>
-            <div class="menu" id="more-menu" role="menu" hidden>
-              <button type="button" role="menuitem" class="menu-item" id="btn-m-font">字号与行距…</button>
-              <button type="button" role="menuitem" class="menu-item" id="btn-m-split">手动标记章节…</button>
-              <button type="button" role="menuitem" class="menu-item" id="btn-m-merge">合并本章到上一章</button>
-              <button type="button" role="menuitem" class="menu-item" id="btn-m-rename">重命名书籍…</button>
-              <button type="button" role="menuitem" class="menu-item" id="btn-m-stats">查看统计…</button>
-              <button type="button" role="menuitem" class="menu-item menu-item-danger" id="btn-m-delete">删除本书…</button>
-            </div>
-          </div>
         </div>
 
         <div class="reader-scroll" id="reader-scroll">
@@ -580,6 +567,19 @@
           <p class="voice-empty" id="custom-voice-empty">尚未导入自定义音色。</p>
         </div>
         <input type="file" id="voice-file-input" accept=".onnx,.json,application/json" multiple hidden />
+      </section>
+
+      <section class="set-group" id="book-actions-group" hidden>
+        <h3 class="set-title">本书操作</h3>
+        <p class="field-note" id="book-actions-hint">针对当前打开的书（内容管理，低频操作）。</p>
+        <div class="btn-row" style="flex-wrap:wrap">
+          <button type="button" class="btn btn-sm" id="btn-m-font">字号与行距…</button>
+          <button type="button" class="btn btn-sm" id="btn-m-split">手动标记章节…</button>
+          <button type="button" class="btn btn-sm" id="btn-m-merge">合并本章到上一章</button>
+          <button type="button" class="btn btn-sm" id="btn-m-rename">重命名书籍…</button>
+          <button type="button" class="btn btn-sm" id="btn-m-stats">查看统计…</button>
+          <button type="button" class="btn btn-sm" id="btn-m-delete">删除本书…</button>
+        </div>
       </section>
 
       <section class="set-group">

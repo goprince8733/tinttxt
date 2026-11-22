@@ -56,8 +56,6 @@ export function createPlayerView(ctx) {
   const voiceSelect = $('#voice-select');
   const sleepSelect = $('#sleep-select');
 
-  const moreMenu = $('#more-menu');
-  const btnMore = $('#btn-more');
 
   /* ---------------- 滚动跟随状态 ---------------- */
 
@@ -905,32 +903,11 @@ export function createPlayerView(ctx) {
   $('#btn-export-chapter').addEventListener('click', () => void exportAudio('chapter'));
   $('#btn-export-book').addEventListener('click', () => void exportAudio('book'));
 
-  /* ================= 更多菜单 ================= */
-
-  function openMenu() {
-    moreMenu.hidden = false;
-    btnMore.setAttribute('aria-expanded', 'true');
-  }
-  function closeMenu() {
-    moreMenu.hidden = true;
-    btnMore.setAttribute('aria-expanded', 'false');
-  }
-  function toggleMenu() {
-    if (moreMenu.hidden) openMenu();
-    else closeMenu();
-  }
-  btnMore.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleMenu();
-  });
-  document.addEventListener('click', (e) => {
-    if (moreMenu.hidden) return;
-    if (moreMenu.contains(e.target) || btnMore.contains(e.target)) return;
-    closeMenu();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !moreMenu.hidden) closeMenu();
-  });
+  /* ================= 本书操作 ================= */
+  // 正文区的「⋯」下拉菜单已移除：窄屏时该行会换行把它挤到左边，
+  // 菜单以 right:0 展开，左半截跑到屏幕外（看起来"空盒子"），还白占一行高度。
+  // 功能统一挪到「设置 → 本书操作」，这里保留空实现供各操作项复用。
+  function closeMenu() { /* 菜单已移除：无需收起 */ }
 
   /* ---- 手动标记章节 ---- */
 

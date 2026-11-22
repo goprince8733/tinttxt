@@ -280,6 +280,17 @@ export function createSettings(ctx) {
       buildEl.textContent = info.build || 'dev';
       buildEl.title = info.sw ? '已由 Service Worker 接管' : '未接管（将每次联网加载最新代码）';
     }
+
+    // 本书操作：只在有打开的书时出现（原来在正文区放「⋯」下拉，窄屏会溢出屏幕外）
+    const bookGroup = $('#book-actions-group');
+    if (bookGroup) {
+      let hasBook = false;
+      try {
+        const st = app.player && app.player.getState ? app.player.getState() : null;
+        hasBook = !!(st && st.bookId);
+      } catch { hasBook = false; }
+      bookGroup.hidden = !hasBook;
+    }
   }
 
   /* ---------------- 开关 ---------------- */
