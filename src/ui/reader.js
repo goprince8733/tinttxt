@@ -63,7 +63,6 @@ export function createPlayerView(ctx) {
   let manualPaused = false;   // 用户手动滚动过 → 软暂停（8 秒无操作自动恢复）
   let progTop = null;         // 本次"程序化滚动"的目标位置
   let progClearTimer = 0;
-  let lastProgAt = 0;         // 上次程序化滚动的发起时间
   let resumeTimer = 0;
   let lastScrollTop = 0;      // 用于区分"用户滑动"与"句子渲染引起的微小位移"
   /**
@@ -307,8 +306,8 @@ export function createPlayerView(ctx) {
     const top = targetTopFor(activeSpan);
     if (Math.abs(readerScroll.scrollTop - top) < 4) return; // 已在位，别抖
     progTop = top;
-    lastProgAt = Date.now();
-    lastScrollTop = top;
+    // 记录"发起滚动前的真实位置"：若记成目标值，平滑滚动的第一帧就会被算成大位移 → 误判为用户滑动
+    lastScrollTop = readerScroll.scrollTop;
     clearTimeout(progClearTimer);
     progClearTimer = setTimeout(() => { progTop = null; }, 1500);
     try {
@@ -354,17 +353,27 @@ export function createPlayerView(ctx) {
   readerScroll.addEventListener('scroll', () => {
     if (!followOn) return;
     const top = readerScroll.scrollTop;
-    const delta = Math.abs(top - lastScrollTop);
+    const prev = lastScrollTop;
+    const delta = Math.abs(top - prev);
     lastScrollTop = top;
     // 重渲染导致的归零/大位移：不算用户操作
     if (Date.now() < ignoreScrollUntil) return;
-    // 自己滚的：目标位置已到（±8px）或刚发起 250ms 内 → 不算手动
-    if (progTop != null && (Math.abs(top - progTop) < 8 || Date.now() - lastProgAt < 250)) return;
-    if (Date.now() - lastProgAt < 250) return;
-    // 只把"明显滑动"当作用户操作：句子渲染/换行会带来几像素的位移，
-    // 若也重置 8 秒计时，朗读过程中会永远回不到跟随状态（实测踩过）。
-    if (delta >= 24) pauseFollow();
+    // 程序化滚动：朝目标位置移动，或已到目标 ±8px
+    if (progTop != null) {
+      const d = Math.abs(top - progTop);
+      if (d < 8) return;
+      if (d < Math.abs(prev - progTop)) return;
+    }
+    // 只把"明显滑动"当作用户操作：句子渲染/换行会带来几像素的位移
+    if (delta >= 12) pauseFollow();
   });
+
+  // 手指一开始移动就暂停并显示提示 —— 不再等 scroll 事件（部分内核首帧不派发 scroll，
+  // 会造成"滑完了才出现提示"）。这是用户感知最直接的时机。
+  readerScroll.addEventListener('touchmove', () => {
+    if (!followOn || manualPaused) return;
+    pauseFollow();
+  }, { passive: true });
 
   if (followHint) {
     followHint.addEventListener('click', () => resumeFollow());
