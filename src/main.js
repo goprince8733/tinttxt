@@ -75,6 +75,8 @@ async function boot() {
   };
 
   ctx.refreshMarks = () => ctx.marks.refresh();
+  // 队列自动续播时，app 通过这个钩子打开下一本并刷新全部视图（否则界面停在上一本）
+  app.setBookOpenHook((id, opts) => ctx.openBookById(id, opts));
   ctx.openMarks = () => ctx.marks.open();
 
   ctx.onBookRenamed = (id, title) => {
@@ -169,7 +171,9 @@ async function boot() {
 
   /* ================= 渲染书架 ================= */
   await ctx.shelf.render();
-  ctx.reader.render();   // 无书时显示空状态，有书时同步章节/控件
+  // 恢复上次书籍时 openBookById 已渲染过阅读器，这里只在无书时渲染空状态，
+  // 避免重复重建章节 DOM / 重复 refreshVoices（并发渲染还会造成下拉重复分组）。
+  if (!ctx.currentBook) ctx.reader.render();
   ctx.mini.refresh();
 
   /* ================= 订阅全部事件 ================= */

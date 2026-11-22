@@ -164,6 +164,9 @@ const HEADERS = `/*
 /asset-chunks.json
   Cache-Control: no-cache
 
+/api/*
+  Cache-Control: no-store
+
 /manifest.webmanifest
   Content-Type: application/manifest+json; charset=utf-8
   Cache-Control: no-cache
@@ -240,13 +243,20 @@ async function splitOversized() {
 }
 
 async function writeSupportFiles() {
-  const manifest = {
-    version: 1,
-    generatedAt: new Date().toISOString(),
-    chunkSize: CHUNK_SIZE,
-    files: chunkFiles,
-  };
-  await fsp.writeFile(path.join(DIST, 'asset-chunks.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  const manifestPath = path.join(DIST, 'asset-chunks.json');
+  // --no-build 复用现有 dist/ 时，chunkFiles 是空的：不能把已有清单覆盖成空，
+  // 否则前端拿不到分片计划、会去下载已被切块删掉的原文件（404）。
+  if (noBuild && Object.keys(chunkFiles).length === 0 && fs.existsSync(manifestPath)) {
+    log('前次已切块：保留现有 asset-chunks.json（--no-build）');
+  } else {
+    const manifest = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      chunkSize: CHUNK_SIZE,
+      files: chunkFiles,
+    };
+    await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  }
   await fsp.writeFile(path.join(DIST, '_headers'), HEADERS, 'utf8');
   // 404.html：Cloudflare Pages 对不存在的路径默认返回 200 + index.html（SPA 兜底），
   // 会把「模型分片缺失」伪装成成功响应 → 前端虽有 Content-Type 兜底，这里再从
@@ -264,6 +274,82 @@ async function writeSupportFiles() {
   }
   const total = files.reduce((s, rel) => s + fs.statSync(path.join(DIST, rel)).size, 0);
   log(`dist/ 检查通过：${files.length} 个文件，共 ${(total / 1024 / 1024).toFixed(1)} MiB，最大 ${maxFile.rel}（${(maxFile.size / 1024 / 1024).toFixed(1)} MiB）`);
+}
+
+/** 确保 Pages 项目绑定了 KV（DATA）——否则额度/限流/熔断全部静默失效。 */
+async function ensurePagesKv(creds, project) {
+  try {
+    const toml = await fsp.readFile(path.join(ROOT, 'worker', 'wrangler.toml'), 'utf8');
+    const m = toml.match(/id\s*=\s*"([0-9a-f]{32})"/);
+    if (!m) {
+      log('⚠ worker/wrangler.toml 里没找到 KV id，跳过 Pages KV 绑定检查（额度可能不生效）');
+      return;
+    }
+    const kvId = m[1];
+    const base = `https://api.cloudflare.com/client/v4/accounts/${creds.account}/pages/projects/${project}`;
+    const res = await fetch(base, { headers: { authorization: `Bearer ${creds.token}` } });
+    if (!res.ok) throw new Error(`读取项目失败 HTTP ${res.status}`);
+    const j = await res.json();
+    const cur = j && j.result && j.result.deployment_configs
+      && j.result.deployment_configs.production
+      && j.result.deployment_configs.production.kv_namespaces
+      && j.result.deployment_configs.production.kv_namespaces.DATA
+      && j.result.deployment_configs.production.kv_namespaces.DATA.namespace_id;
+    if (cur === kvId) {
+      log(`Pages KV 绑定已就绪（DATA=${kvId.slice(0, 8)}…）`);
+      return;
+    }
+    const patch = await fetch(base, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${creds.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        deployment_configs: { production: { kv_namespaces: { DATA: { namespace_id: kvId } } } },
+      }),
+    });
+    if (!patch.ok) throw new Error(`绑定失败 HTTP ${patch.status} ${(await patch.text()).slice(0, 200)}`);
+    log(`已为 Pages 绑定 KV（DATA=${kvId.slice(0, 8)}…）——额度/限流已生效`);
+  } catch (e) {
+    log(`⚠ KV 绑定检查失败：${e.message}`);
+  }
+}
+
+/** 部署后自检：云端 API 必须真的在用百度（而不是静默回落 mock/占位音）。 */
+async function verifyCloudApi(project) {
+  const base = `https://${project}.pages.dev`;
+  let lastErr = null;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const r = await fetch(`${base}/api/health`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error('健康检查 ok=false');
+      if (!j.configured) {
+        throw new Error('服务端密钥未生效（configured=false）：请设置 BAIDU_API_KEY / BAIDU_SECRET_KEY');
+      }
+      // 光看 /api/health 不够：必须真合成一次，确认「供应商→WAV」整条链路没坏
+      // （曾出现 health 正常但合成恒失败的情况，静默上线）。
+      const probe = await fetch(`${base}/api/tts`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-device-id': `deploy-probe-${Math.random().toString(36).slice(2, 10)}` },
+        body: JSON.stringify({ text: '部署自检', voice: '0', rate: 1 }),
+      });
+      if (!probe.ok) {
+        const msg = await probe.text().catch(() => '');
+        throw new Error(`合成自检失败 HTTP ${probe.status} ${msg.slice(0, 160)}`);
+      }
+      const ctype = probe.headers.get('content-type') || '';
+      const bytes = (await probe.arrayBuffer()).byteLength;
+      if (!/^audio\//i.test(ctype) || bytes < 1000) {
+        throw new Error(`合成自检返回异常（content-type=${ctype} size=${bytes}）`);
+      }
+      log(`云端 API 自检通过：provider=${j.provider} configured=${j.configured}，合成 ${bytes}B ${ctype}`);
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < 4) await new Promise((r2) => setTimeout(r2, 3000));
+    }
+  }
+  throw new Error(`部署后云端自检失败：${lastErr ? lastErr.message : '未知'}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +380,9 @@ async function deploy(creds) {
     throw new Error(`创建 Pages 项目失败（exit ${created.code}）：\n${created.out}`);
   }
 
+  // 5.1.5 绑定 KV（额度/限流依赖它；缺了会静默失效，必须显式确认）
+  await ensurePagesKv(creds, PROJECT);
+
   // 5.2 上传 dist/（含 Pages Functions：复制 functions/ → dist/functions/）
   log(`上传 dist/ → ${PROJECT} …`);
   const fnsSrc = path.join(ROOT, 'functions');
@@ -307,6 +396,8 @@ async function deploy(creds) {
   if (up.code !== 0) throw new Error(`部署失败（exit ${up.code}）`);
 
   const url = `https://${PROJECT}.pages.dev`;
+  // 5.3 部署后自检：确认云端真的可用（密钥/供应商生效），否则明确报错而不是静默降级
+  await verifyCloudApi(PROJECT);
   log(`部署完成：${url}`);
   return url;
 }

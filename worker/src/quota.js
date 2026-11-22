@@ -12,8 +12,8 @@
  */
 
 export const DEFAULT_LIMITS = Object.freeze({
-  /** 单请求最大字符数 */
-  maxCharsPerRequest: 500,
+  /** 单请求最大字符数（百度 text2audio 约 1024 字节 ≈ 341 汉字，留足余量取 300） */
+  maxCharsPerRequest: 300,
   /** 每 IP 每分钟最大请求数 */
   perIpPerMinute: 10,
   /** 免费试听：每设备每天句数 */
@@ -41,22 +41,26 @@ export function limitsFromEnv(env = {}) {
   const out = { ...DEFAULT_LIMITS };
   for (const [k, envKey] of Object.entries(ENV_KEYS)) {
     const v = Number(env[envKey]);
-    if (Number.isFinite(v) && v > 0) out[k] = v;
+    // 允许显式 0（例如 FREE_CHARS_PER_DAY=0 关闭免费档），非法值忽略
+    if (Number.isFinite(v) && v >= 0) out[k] = v;
   }
   return out;
 }
 
-/** UTC 日期键（额度按天重置，与用户时区无关，避免时区刷额度）。 */
+/** 日界时区偏移：按北京时间（UTC+8）重置，避免"早上 7 点额度用完、8 点又恢复"的困惑。 */
+const TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+/** 日期键（额度按天重置，用北京时间的日界）。 */
 export function dayKey(ts = Date.now()) {
-  const d = new Date(ts);
+  const d = new Date(ts + TZ_OFFSET_MS);
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${d.getUTCFullYear()}${mm}${dd}`;
 }
 
-/** UTC 分钟键（限流窗口）。 */
+/** 分钟键（限流窗口）。 */
 export function minuteKey(ts = Date.now()) {
-  const d = new Date(ts);
+  const d = new Date(ts + TZ_OFFSET_MS);
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mi = String(d.getUTCMinutes()).padStart(2, '0');
   return `${dayKey(ts)}${hh}${mi}`;

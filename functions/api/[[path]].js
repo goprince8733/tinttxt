@@ -50,6 +50,8 @@ function json(data, status = 200, extraHeaders) {
 function withCors(res, cors) {
   const out = new Response(res.body, { status: res.status, headers: res.headers });
   for (const [k, v] of cors) out.headers.set(k, v);
+  // API 响应绝不缓存（额度/音色/健康状态都是实时的）
+  out.headers.set('cache-control', 'no-store');
   return out;
 }
 
@@ -60,8 +62,8 @@ async function getJson(env, key) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-async function putJson(env, key, value) {
-  await safePut(env, key, JSON.stringify(value));
+async function putJson(env, key, value, ttlSeconds) {
+  await safePut(env, key, JSON.stringify(value), ttlSeconds);
 }
 
 /**
@@ -69,21 +71,27 @@ async function putJson(env, key, value) {
  * Cloudflare KV 对「同一 key」限制 1 次写入/秒，并发请求会返回 429：
  * 记账失败绝不能把合成请求打成 500（宁可少记一笔，也要让用户听到声音）。
  */
-async function safePut(env, key, value) {
+async function safePut(env, key, value, ttlSeconds) {
   if (!env.DATA) return;
   try {
-    await env.DATA.put(key, value);
+    await env.DATA.put(key, value, ttlSeconds ? { expirationTtl: ttlSeconds } : undefined);
   } catch (e) {
     // 429/网络抖动：忽略，下个请求会以较新读数继续累计
   }
 }
 
-async function bump(env, key, by = 0) {
+const TTL = Object.freeze({
+  rate: 180,          // 限流窗口 3 分钟
+  counter: 3 * 24 * 3600, // 日额度键保留 3 天
+  pass: 90 * 24 * 3600,
+});
+
+async function bump(env, key, by = 0, ttlSeconds) {
   if (!env.DATA) return by;
   let cur = 0;
   try { cur = Number((await env.DATA.get(key)) || 0); } catch { /* ignore */ }
   const next = cur + by;
-  await safePut(env, key, String(next));
+  await safePut(env, key, String(next), ttlSeconds);
   return next;
 }
 
@@ -95,6 +103,13 @@ function deviceIdOf(request) {
 async function handleTts(request, env, { trial = false } = {}) {
   const limits = limitsFromEnv(env);
   const provider = resolveProvider(env);
+  // 供应商未配置时明确报错（不要静默返回 mock 占位音，用户会以为自己耳朵坏了）
+  if (provider.name === 'mock' && (env.TTS_PROVIDER || 'baidu') !== 'mock') {
+    return json({ error: '云端语音未配置（服务端缺少供应商密钥），已改用本地语音' }, 503);
+  }
+  // 跨站请求直接拒绝：额度按设备算，device id 是客户端自造的，跨站刷额度必须挡住
+  const site = request.headers.get('sec-fetch-site') || '';
+  if (site === 'cross-site') return json({ error: '不允许跨站调用' }, 403);
   const now = Date.now();
 
   let body;
@@ -121,7 +136,7 @@ async function handleTts(request, env, { trial = false } = {}) {
   const rateKey = `rate:${ip}:${minuteKey(now)}`;
   const rateUsed = env.DATA ? Number((await env.DATA.get(rateKey).catch(() => 0)) || 0) : 0;
   if (!allowByRate(rateUsed, limits)) return json({ error: '请求过于频繁' }, 429);
-  await safePut(env, rateKey, String(rateUsed + 1));
+  await safePut(env, rateKey, String(rateUsed + 1), TTL.rate);
 
   // 日预算熔断
   const day = dayKey(now);
@@ -156,10 +171,10 @@ async function handleTts(request, env, { trial = false } = {}) {
   }
 
   // 落账
-  if (trial) await bump(env, `trial:${device}:${day}`, 1);
-  if (pass) { pass.day[day] = Number(pass.day[day] || 0) + chars; await putJson(env, `pass:${auth}`, pass); }
-  else if (!trial) await safePut(env, `free:${device}:${day}`, String(quota.used));
-  await bump(env, `budget:${day}`, chars);
+  if (trial) await bump(env, `trial:${device}:${day}`, 1, TTL.counter);
+  if (pass) { pass.day[day] = Number(pass.day[day] || 0) + chars; await putJson(env, `pass:${auth}`, pass, TTL.pass); }
+  else if (!trial) await safePut(env, `free:${device}:${day}`, String(quota.used), TTL.counter);
+  await bump(env, `budget:${day}`, chars, TTL.counter);
 
   const headers = quotaHeaders(quota, checkCircuit(budgetUsed + chars, limits));
   headers.set('content-type', out.mime || 'audio/wav');

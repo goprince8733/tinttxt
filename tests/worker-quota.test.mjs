@@ -17,10 +17,17 @@ import worker from '../worker/src/index.js';
 
 /* ---------------- quota 纯函数 ---------------- */
 
-test('dayKey/minuteKey 输出定长键', () => {
-  const t = Date.UTC(2026, 10, 20, 8, 5);
+test('dayKey/minuteKey 输出定长键（北京时区日界）', () => {
+  const t = Date.UTC(2026, 10, 20, 8, 5); // UTC 08:05 = 北京 16:05
   assert.equal(dayKey(t), '20261120');
-  assert.equal(minuteKey(t), '202611200805');
+  assert.equal(minuteKey(t), '202611201605');
+});
+
+test('dayKey 按北京时间日界切分（UTC 17:30 = 北京次日 01:30）', () => {
+  const before = Date.UTC(2026, 10, 20, 15, 59); // 北京 23:59
+  const after = Date.UTC(2026, 10, 20, 16, 0);  // 北京次日 00:00
+  assert.equal(dayKey(before), '20261120');
+  assert.equal(dayKey(after), '20261121');
 });
 
 test('limitsFromEnv 覆盖与非法值忽略', () => {

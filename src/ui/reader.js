@@ -186,7 +186,16 @@ export function createPlayerView(ctx) {
       spans.set(i, span);
       frag.append(span);
     }
-    readerContent.append(frag);
+    if (!frag.childNodes.length) return;
+    // 向后补渲染（from 小于已渲染起点）必须插到最前面：
+    // 原先一律 append 到章末，会导致往回看时句子顺序错乱。
+    if (from < renderFrom && firstSpanEl && firstSpanEl.parentNode === readerContent) {
+      readerContent.insertBefore(frag, firstSpanEl);
+      firstSpanEl = readerContent.firstChild;
+    } else {
+      readerContent.append(frag);
+      if (!firstSpanEl) firstSpanEl = readerContent.firstChild;
+    }
     if (renderFrom < 0 || from < renderFrom) renderFrom = from;
     if (to > renderTo) renderTo = to;
   }
@@ -215,12 +224,15 @@ export function createPlayerView(ctx) {
   const spans = new Map();
   /** 已渲染的章节下标（-1 = 未渲染） */
   let renderedChIdx = -1;
+  /** 正文里最靠前的句子节点：向前补渲染时插到它前面，保证正文顺序不乱。 */
+  let firstSpanEl = null;
   function clearSpans() {
     spans.clear();
     activeSpan = null;
     renderedChIdx = -1;
     renderFrom = -1;
     renderTo = -1;
+    firstSpanEl = null;
   }
 
   function onSentenceClick(idx) {
@@ -407,6 +419,8 @@ export function createPlayerView(ctx) {
    */
   /** 上次渲染音色列表时的活跃引擎（引擎变化需重刷，否则会残留别的引擎的音色）。 */
   let lastVoiceEngine = '';
+  /** 音色列表刷新代号：并发调用时只让最后一次渲染生效。 */
+  let voicesGen = 0;
 
   function onState(patch) {
     if (!patch) return;
@@ -598,12 +612,11 @@ export function createPlayerView(ctx) {
     const settings = app.getSettings();
     // 只展示「当前活跃引擎」的音色：音色 ID 跨引擎不通用（选了本地音色传给云端会被兜底成默认音色）
     const activeId = app.registry && app.registry.active ? app.registry.active.id : '';
-    clear(voiceSelect);
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = '默认';
-    voiceSelect.append(def);
-
+    // 先把数据全部取完，再一次性替换 DOM：
+    // 原实现先 clear 再逐组 await，refreshVoices 被多处并发调用时会互相插队，
+    // 结果下拉框里出现多份重复分组（实测 3 份同源 optgroup）。
+    const gen = ++voicesGen;
+    const groups = [];
     for (const adapter of app.registry.list()) {
       if (activeId && adapter.id !== activeId) continue;
       let voices = [];
@@ -639,9 +652,20 @@ export function createPlayerView(ctx) {
         }
       }
       if (!voices.length) continue;
+      groups.push({ label: adapter.label, voices });
+    }
+    // 期间又有新的刷新请求（引擎/模型变化）→ 丢弃本次结果，避免旧数据覆盖新数据
+    if (gen !== voicesGen) return;
+
+    clear(voiceSelect);
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = '默认';
+    voiceSelect.append(def);
+    for (const g of groups) {
       const group = document.createElement('optgroup');
-      group.label = adapter.label;
-      for (const v of voices) {
+      group.label = g.label;
+      for (const v of g.voices) {
         const o = document.createElement('option');
         o.value = v.id;
         o.textContent = v.label;
@@ -658,7 +682,9 @@ export function createPlayerView(ctx) {
 
   function togglePlay() {
     const st = player.getState();
-    if (st.status === 'playing') {
+    // loading/buffering 也算「正在播」：云端合成有 3~8 秒窗口，若此时点按钮不响应，
+    // 用户会判定"按钮坏了、停不下来"。这里统一走 pause（会中止在途合成）。
+    if (st.status === 'playing' || st.status === 'loading' || st.status === 'buffering') {
       player.pause();
     } else {
       // 立即变暂停图标（不等异步状态事件）
@@ -681,22 +707,27 @@ export function createPlayerView(ctx) {
   btnPlay.addEventListener('click', togglePlay);
   $('#btn-prev').addEventListener('click', () => void player.prevSentence());
   $('#btn-next').addEventListener('click', () => void player.nextSentence());
+  // 章节按钮：无书时给出提示，不要静默无反应（用户会以为按钮坏了）
   $('#btn-prev-ch').addEventListener('click', () => {
     const book = ctx.currentBook;
-    if (book) void player.prevChapter(book.chapters);
+    if (!book) { ctx.toast('还没有打开的书', 'warn'); return; }
+    void player.prevChapter(book.chapters);
   });
   $('#btn-next-ch').addEventListener('click', () => {
     const book = ctx.currentBook;
-    if (book) void player.nextChapter(book.chapters);
+    if (!book) { ctx.toast('还没有打开的书', 'warn'); return; }
+    void player.nextChapter(book.chapters);
   });
   $('#btn-retry').addEventListener('click', () => void player.play());
   $('#btn-back').addEventListener('click', () => ctx.router.go('#shelf'));
   $('#btn-go-shelf').addEventListener('click', () => ctx.router.go('#shelf'));
   $('#btn-download-model').addEventListener('click', onDownloadModel);
 
+  // 语速：拖动时只更新数字显示，松手（change）才真正改语速。
+  // 原因：setRate 会作废当前块并重新合成，input 每帧都调会导致"反复掐断+重复合成"，
+  // 云端按字计费，一次拖动能烧掉几十句的额度，声音也会一直卡断。
   rateRange.addEventListener('input', () => {
     const r = Number(rateRange.value);
-    player.setRate(r); // 实时生效
     rateVal.textContent = `${r.toFixed(2)}×`;
     const setRateEl = $('#set-rate');
     const setRateVal = $('#set-rate-val');
@@ -704,7 +735,10 @@ export function createPlayerView(ctx) {
     if (setRateVal) setRateVal.textContent = `${r.toFixed(2)}×`;
   });
   rateRange.addEventListener('change', () => {
-    void app.updateSettings({ rate: Number(rateRange.value) }); // 持久化
+    const r = Number(rateRange.value);
+    player.setRate(r); // 松手才生效（一次）
+    rateVal.textContent = `${r.toFixed(2)}×`;
+    void app.updateSettings({ rate: r }); // 持久化
   });
 
   volRange.addEventListener('input', () => {
@@ -1094,10 +1128,17 @@ export function createPlayerView(ctx) {
   const miniSleepBtn = $('#btn-mini-sleep');
   if (miniSleepBtn) miniSleepBtn.addEventListener('click', () => cycleSleepTimer(miniSleepBtn));
 
+  /** 睡眠菜单的「点外部关闭」监听器清理函数（所有关闭路径都要调，避免监听器累积）。 */
+  let sleepPopupCleanup = null;
+
   function cycleSleepTimer(anchorBtn) {
     // 弹出选择菜单（不是静默循环——用户要看到选项）
     const existing = $('#sleep-popup');
-    if (existing) { existing.remove(); return; } // 再点关闭
+    if (existing) {
+      existing.remove();
+      if (sleepPopupCleanup) { sleepPopupCleanup(); sleepPopupCleanup = null; }
+      return; // 再点关闭
+    }
     const popup = document.createElement('div');
     popup.id = 'sleep-popup';
     popup.className = 'sleep-popup';
@@ -1117,6 +1158,7 @@ export function createPlayerView(ctx) {
       btn.textContent = o.label;
       btn.addEventListener('click', () => {
         popup.remove();
+        if (sleepPopupCleanup) { sleepPopupCleanup(); sleepPopupCleanup = null; }
         if (o.val === 'off') {
           app.clearSleepTimer?.();
         } else if (o.val === 'chapter') {
@@ -1137,12 +1179,15 @@ export function createPlayerView(ctx) {
     document.body.append(popup);
     // 点外部关闭
     setTimeout(() => {
-      document.addEventListener('click', function close(e) {
+      const close = (e) => {
         if (!popup.contains(e.target)) {
           popup.remove();
           document.removeEventListener('click', close);
+          sleepPopupCleanup = null;
         }
-      });
+      };
+      sleepPopupCleanup = () => document.removeEventListener('click', close);
+      document.addEventListener('click', close);
     }, 50);
   }
 

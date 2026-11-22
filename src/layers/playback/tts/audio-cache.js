@@ -26,6 +26,41 @@ let repairTried = false;
 /** 缓存临时不可用截止时间：失败后 60 秒内直接跳过，避免每句都等超时拖慢合成。 */
 let cacheDisabledUntil = 0;
 
+/**
+ * 进程内音频记忆层（同步命中，先于 IndexedDB）。
+ * 作用：跳句/连点会 abort 正在合成的块，重建时 IndexedDB 写入可能还没落地，
+ * 导致同一句被云端再合成一次（既慢又烧额度）。这里在合成成功那一刻同步记住 Blob，
+ * 重建时立刻命中，保证「一句话一次会话内只向云端要一次」。
+ * 上限 48 句（约 4~6 MB），按插入顺序淘汰最旧。
+ */
+const MEM_MAX = 48;
+/** @type {Map<string, Blob>} */
+const memAudio = new Map();
+/** 同步记忆键（与 SHA 键同源但无需 await，用于内存层快速命中）。 */
+function memKey(text, voiceId, rate) {
+  return `${normalizeText(text)}|${voiceId || 'default'}|${rate || 1}`;
+}
+/**
+ * 同步查内存层（不碰 IndexedDB）。
+ * 适配器发请求前用它做最后一次确认：避免"刚合成完但缓存还没落到 IndexedDB"时又发一次。
+ * @returns {Blob|null}
+ */
+export function peekAudio(text, voiceId, rate) {
+  return memAudio.get(memKey(text, voiceId, rate)) || null;
+}
+
+/** 同步记住刚合成好的音频（供本轮/重建复用）。 */
+export function memoAudio(text, voiceId, rate, blob) {  if (!blob || !blob.size) return;
+  const k = memKey(text, voiceId, rate);
+  memAudio.delete(k);
+  memAudio.set(k, blob);
+  while (memAudio.size > MEM_MAX) {
+    const oldest = memAudio.keys().next().value;
+    if (oldest === undefined) break;
+    memAudio.delete(oldest);
+  }
+}
+
 function openDb() {
   if (dbPromise) return dbPromise;
   if (cacheDisabledUntil > Date.now()) return Promise.reject(new Error('音频缓存临时不可用'));
@@ -109,6 +144,10 @@ async function cacheKey(text, voiceId, rate) {
  */
 export async function getAudio(text, voiceId, rate) {
   try {
+    // 内存层先命中：避免 IndexedDB 写入未落地导致重复合成
+    const mk = memKey(text, voiceId, rate);
+    const memHit = memAudio.get(mk);
+    if (memHit) return memHit;
     const key = await cacheKey(text, voiceId, rate);
     const db = await openDb();
     // 注意：必须 await —— 事务创建可能同步抛错（库缺表），否则会绕过 catch 把播放打挂
@@ -146,6 +185,7 @@ export async function getAudio(text, voiceId, rate) {
  */
 export async function putAudio(text, voiceId, rate, blob) {
   if (!blob || !blob.size) return;
+  memoAudio(text, voiceId, rate, blob); // 先同步进内存层（同步、必定生效）
   try {
     const key = await cacheKey(text, voiceId, rate);
     const db = await openDb();
@@ -224,6 +264,7 @@ export async function evictLru() {
  * @returns {Promise<void>}
  */
 export async function clearAudioCache() {
+  memAudio.clear(); // 内存层也要清：否则"清理缓存"后仍命中内存，用户以为没清掉
   try {
     const db = await openDb();
     await new Promise((resolve) => {

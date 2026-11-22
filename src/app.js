@@ -284,15 +284,14 @@ export async function createApp() {
             : st && st.sentenceIndex != null
               ? { sentenceIndex: st.sentenceIndex }
               : {};
+    // 本书记忆的语速/音色/音量随 loadBook 一起生效（避免"先按旧语速合成再重来"）
     await player.loadBook(book, {
       ...resumePos,
+      rate: st && st.rate ? st.rate : settings.rate,
+      volume: st && st.volume != null ? st.volume : settings.volume,
+      voice: st && st.voice !== undefined ? st.voice : settings.voice,
       autoplay: opts.autoplay ?? false,
     });
-    if (st) {
-      // 恢复语速/音色/音量（每书独立记忆）
-      if (st.rate && st.rate !== settings.rate) player.setRate(st.rate);
-      if (st.volume != null && st.volume !== settings.volume) player.setVolume(st.volume);
-    }
     if (settings.wakelockEnabled && document.visibilityState === 'visible') void wakeLock.request();
     // 开书即预热：云端引擎后台合成首块（点播放几乎立刻出声）；本地引擎由 resolveAdapter 触发后台下载/预热
     void (async () => {
@@ -380,6 +379,16 @@ export async function createApp() {
     return true;
   }
 
+  /**
+   * 队列续播时的「打开并刷新 UI」钩子。
+   * app 层只管播放器，标题栏/章节目录/书签在装配层（main.js ctx.openBookById），
+   * 不接这个钩子就会出现：书已经换了一本，界面还停在上一本，章节按钮按旧坐标乱跳。
+   */
+  let bookOpenHook = null;
+  function setBookOpenHook(fn) {
+    bookOpenHook = typeof fn === 'function' ? fn : null;
+  }
+
   // 一本书自然读完 → 自动续播队列下一本书（需求 A：多文件排队播放）
   bus.on(Events.BOOK_END, async () => {
     if (!playQueue.length) return;
@@ -392,7 +401,8 @@ export async function createApp() {
         return;
       }
       await setQueue(playQueue.slice(1));
-      await openBook(nextId, { autoplay: true });
+      if (bookOpenHook) await bookOpenHook(nextId, { autoplay: true });
+      else await openBook(nextId, { autoplay: true });
       bus.emit(Events.TOAST, { message: `继续播放：${book.title}`, level: 'info' });
     } catch (e) {
       bus.emit(Events.ERROR, { message: `排队播放失败：${(e && e.message) || e}`, recoverable: false });
@@ -609,10 +619,16 @@ export async function createApp() {
     bus.emit(Events.STATE, { sleep: { ...mode, remainingMs: mode.kind === 'duration' ? mode.minutes * 60000 : null } });
   }
 
-  // 「读完本章」触发器：进入非设定章（本章自然读完进入下一章，或用户跳章）即淡出停止
+  // 「读完本章」触发器：只在"向前"跨章时停止。
+  // 原来用 !== 判断，用户往回跳章会被误判为读完本章直接淡出。
   bus.on(Events.SENTENCE, ({ sentence }) => {
     if (!sleepMode || sleepMode.kind !== 'chapter' || sleepChapterIndex == null || !sentence) return;
-    if (sentence.chapter !== sleepChapterIndex) {
+    if (sentence.chapter > sleepChapterIndex) void fireSleepTimer('本章已读完，定时停止');
+  });
+  // 最后一章读完时只有 BOOK_END、没有下一句的 SENTENCE 事件：
+  // 不在这里兜底，"读完本章"在最后一章永远不触发（定时残留、不淡出）。
+  bus.on(Events.BOOK_END, () => {
+    if (sleepMode && sleepMode.kind === 'chapter' && sleepChapterIndex != null) {
       void fireSleepTimer('本章已读完，定时停止');
     }
   });
@@ -754,6 +770,7 @@ export async function createApp() {
     diag,
     registry,
     resolveAdapter,
+    setBookOpenHook,
     // 导入/书架
     importFiles,
     openBook,

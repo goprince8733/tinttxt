@@ -13,7 +13,7 @@
 
 import { Events } from '../../core/contracts.js';
 import { mergeWavParts, buildSentenceTimeline, wavDuration, parseWav, silenceWav } from './wav.js';
-import { getAudio, putAudio, evictLru } from './tts/audio-cache.js';
+import { getAudio, putAudio, memoAudio, evictLru } from './tts/audio-cache.js';
 
 /** 句间呼吸停顿（毫秒）：插在块内相邻句子之间，消除逐句连播的"赶稿感"（可按喜好调这里）。 */
 const SENTENCE_GAP_MS = 300;
@@ -92,7 +92,8 @@ export function createPlayer(deps) {
   const MAX_CACHE = 4; // 只保留附近块，控制内存（WAV 较大）
 
   // 规则2：预取深度（句）：播当前句时合成后续 3~5 句
-  let prefetchDepth = settings.prefetchDepth ?? 3;
+  // 预取深度上限 2：云端按字计费，预取过深会在用户暂停/切书时白烧额度
+  let prefetchDepth = Math.min(Number(settings.prefetchDepth) || 2, 2);
   /** 播放块目标时长（秒）：首块 3~8 秒先出声（规则2），块小→首声快。 */
   // 块大小上限 30 秒：块越大首块合成越久（云端每句 1~3 秒），也越难在块的播放时长内预取完下一块。
   // 老存档里的 100 秒也夹到 30，避免"点播放要等半分钟"。
@@ -105,6 +106,8 @@ export function createPlayer(deps) {
   let activeEngineId = '';
   /** 用户主动定位（跳句/跳章/拖进度）的代号：块播完的自动前进不得覆盖它。 */
   let seekGen = 0;
+  /** 跨块定位的"开始合成"防抖定时器（连点只合成最终目标）。 */
+  let seekBuildTimer = 0;
   /** 引擎作用域下的缓存音色键。 */
   const cacheVoiceKey = () => `${activeEngineId || 'unknown'}:${state.voice || 'default'}`;
   // 注：chunkSeconds 在上方声明（规则2：首块 3~8 秒）
@@ -303,6 +306,7 @@ export function createPlayer(deps) {
               signal: controller.signal,
             });
             if (res.preview) { previewAt = i; previewRes = res; return; }
+            memoAudio(sentences[i].speak, cacheVoiceKey(), state.rate, res.blob); // 先占内存，abort 重建不再重复合成
             bufByIndex.set(i, await res.blob.arrayBuffer());
             void putAudio(sentences[i].speak, cacheVoiceKey(), state.rate, res.blob).then(() => evictLru());
           }
@@ -355,6 +359,7 @@ export function createPlayer(deps) {
           return chunk;
         }
         const buf = await res.blob.arrayBuffer();
+        memoAudio(s.speak, cacheVoiceKey(), state.rate, res.blob); // 先占内存，abort 重建不再重复合成
         parts.push(buf);
         ids.push(i);
         // 写入按句缓存（规则1+4）：下次回退/重听/跳章直接命中
@@ -463,23 +468,33 @@ export function createPlayer(deps) {
     void ensureChunk(idx).catch(() => {});
   }
 
+  /** 预取单飞标志：多处（play/seek/advance/onVisible/setRate）都会调，不单飞会并发预取多块。 */
+  let prefetchRunning = false;
   async function prefetch() {
-    const from = state.chunkIndex;
-    for (let d = 1; d <= prefetchDepth; d++) {
-      const idx = from + d;
-      if (idx >= chunkBounds.length) break;
-      let chunk = chunkCache.get(idx);
-      if (!chunk || chunk.status !== 'ready') {
-        try {
-          chunk = await ensureChunk(idx);
-        } catch (e) {
-          if (e && e.name === 'AbortError') return;
-          console.warn('[player] 预取失败', idx, e);
-          return;
+    if (prefetchRunning) return;
+    // 只有"确实想听"才预取：暂停/未播时预取纯属烧额度（云端按字计费）
+    if (!wantPlaying || destroy) return;
+    prefetchRunning = true;
+    try {
+      const from = state.chunkIndex;
+      for (let d = 1; d <= prefetchDepth; d++) {
+        const idx = from + d;
+        if (idx >= chunkBounds.length) break;
+        let chunk = chunkCache.get(idx);
+        if (!chunk || chunk.status !== 'ready') {
+          try {
+            chunk = await ensureChunk(idx);
+          } catch (e) {
+            if (e && e.name === 'AbortError') return;
+            console.warn('[player] 预取失败', idx, e);
+            return;
+          }
         }
+        if (destroy || sessionAbort.signal.aborted || !wantPlaying) return;
+        // 预取下一块：合成完成后已就绪，onended 时由 advanceChunk 直接加载（规则5）
       }
-      if (destroy || sessionAbort.signal.aborted) return;
-      // 预取下一块：合成完成后已就绪，onended 时由 advanceChunk 直接加载（规则5）
+    } finally {
+      prefetchRunning = false;
     }
   }
 
@@ -521,10 +536,14 @@ export function createPlayer(deps) {
     };
     el.onended = () => {
       if (el !== activeEl) return;
+      // 暂停在块尾时不要继续合成下一块（合成完也会被丢弃，白烧额度）
+      if (!wantPlaying) return;
       void advanceChunk();
     };
     el.onplaying = () => {
       if (el !== activeEl) return;
+      // 用户已按暂停（但上一次 play() 的 promise 可能在此刻解析）：不要覆盖暂停意图
+      if (!wantPlaying) return;
       if (state.status !== 'playing') setStatus('playing');
     };
     el.onwaiting = () => {
@@ -584,12 +603,18 @@ export function createPlayer(deps) {
 
     if (chunk.preview) {
       // 预览降级：直接走 speechSynthesis（不满足熄屏约束，UI 已标注）
+      // 暂停状态下跳句只定位不出声：否则会无声却显示"播放中"（onend 因 wantPlaying=false 不前进）
+      if (!wantPlaying && !opts.autoplay) {
+        if (state.status === 'loading') setStatus('paused');
+        return;
+      }
       return previewSpeak(chunk);
     }
 
     if (!chunk.url) {
-      // 空块（全是跳过行）
-      if (opts.autoplay) return advanceChunk();
+      // 空块（整块都是跳过行/纯标点）：绝不能留 loading（会永久转圈）
+      if (opts.autoplay && wantPlaying) return advanceChunk();
+      if (state.status === 'loading') setStatus('paused');
       return;
     }
 
@@ -756,6 +781,14 @@ export function createPlayer(deps) {
 
     bookId = book.id;
     bookTitle = book.title;
+    // 每书独立记忆的语速/音色/音量：必须在 planChunks 之前生效，
+    // 否则会先按旧语速规划，再由外部 setRate 推翻重规划（白合成一块）。
+    if (opts.rate != null) state.rate = Math.min(2, Math.max(0.5, Number(opts.rate) || 1));
+    if (opts.voice !== undefined) state.voice = opts.voice || null;
+    if (opts.volume != null) {
+      state.volume = Math.min(1, Math.max(0, Number(opts.volume)));
+      audioA.volume = state.volume;
+    }
     sentences = book.sentences || [];
     chunkBounds = planChunks();
 
@@ -771,6 +804,9 @@ export function createPlayer(deps) {
       sentenceIndex: clamped,
       charOffset: s ? s.start : 0,
       chunkIndex: chunkBounds.length ? chunkOfSentence(clamped) : 0,
+      rate: state.rate,
+      volume: state.volume,
+      voice: state.voice,
     });
     setStatus('idle');
     syncMediaSession();
@@ -811,9 +847,10 @@ export function createPlayer(deps) {
     wantPlaying = true;
     setStatus('loading');
 
-    // 取消可能卡住的旧合成 —— 但若目标块正在合成（开书预热），必须复用它，不能取消重来
+    // 取消可能卡住的旧合成 —— 但若目标块正在合成（开书预热），必须复用它，不能取消重来。
+    // 仅在状态已出错时才清（正常跳转不 abort 在途合成，避免重复计费）。
     const pendingIdx = chunkBounds.length ? chunkOfSentence(state.sentenceIndex) : 0;
-    if (!inflight.has(pendingIdx)) cancelAll();
+    if (!inflight.has(pendingIdx) && state.status === 'error') cancelAll();
 
     // 关键：在 await 之前同步调 speechSynthesis（360Browser 需要用户手势上下文）。
     // 用静音预热（volume=0）激活语音引擎，真正的朗读由 previewSpeak/<audio> 接管——
@@ -854,7 +891,9 @@ export function createPlayer(deps) {
       void prefetch();
       return;
     }
-    const idx = chunkBounds.length ? chunkOfSentence(state.sentenceIndex) : 0;
+    // 引擎初始化期间用户可能已按了暂停：此时不要再启动合成（省额度）
+    if (!wantPlaying || destroy) return;
+
     seekToSentence(state.sentenceIndex, { play: true }).catch((e) => {
       if (e && e.name === 'AbortError') return;
       setStatus('error', `播放失败: ${e.message}`);
@@ -864,6 +903,9 @@ export function createPlayer(deps) {
 
   function pause() {
     wantPlaying = false;
+    // 暂停即中止在途合成：否则整块剩余句子仍会继续向云端要音频（白烧额度/流量/电），
+    // 已合成的句子都在缓存里，重新播放时不会重合成。
+    cancelAll();
     activeEl.pause();
     // 强力取消所有语音（含 trySpeak 轮询中的 + 手势预热的）
     if (typeof window !== 'undefined' && window.speechSynthesis) {
@@ -879,6 +921,7 @@ export function createPlayer(deps) {
   }
 
   function cancelAll() {
+    if (seekBuildTimer) { clearTimeout(seekBuildTimer); seekBuildTimer = 0; }
     sessionAbort.abort();
     sessionAbort = new AbortController();
     for (const [, e] of inflight) e.controller.abort();
@@ -940,6 +983,8 @@ export function createPlayer(deps) {
               if (wantPlaying && !destroy) setStatus('paused');
             };
             try {
+              // 先取消旧句：否则旧句会先念完再念新句（高亮已跳、声音滞后）
+              window.speechSynthesis.cancel();
               window.speechSynthesis.speak(u);
               setStatus('playing');
             } catch {
@@ -962,12 +1007,21 @@ export function createPlayer(deps) {
           try {
             await activeEl.play();
             setStatus('playing');
-          } catch {
-            /* ignore */
+          } catch (e) {
+            // 恢复播放失败（Safari/360 的 NotAllowedError，或并发 pause 的 AbortError）：
+            // 绝不能静默吞掉——否则 status 永久停在 loading（"一直转圈"）。
+            setStatus('paused');
+            if (!e || e.name !== 'AbortError') {
+              bus.emit(Events.TOAST, { message: '浏览器阻止了播放，请再点一次播放按钮', level: 'warn' });
+            }
           }
         }
         return;
       }
+      // 同块内但时间轴上找不到目标句（跳过行/空 speak 落在块尾）：
+      // 直接停在块内最后可播位置，不要掉进跨块分支重建同一块（重复合成 + 从句首重放）。
+      if (state.status === 'loading') setStatus(wantPlaying ? 'playing' : 'paused');
+      return;
     }
 
     // 该块已在合成中（如开书预热）：直接等它，避免取消后从头再合成一遍
@@ -995,26 +1049,39 @@ export function createPlayer(deps) {
       return;
     }
 
-    // 跨块：取消旧合成 → 立即返回 → 新合成后台跑（用户可继续操作）
-    cancelAll();
+    // 跨块：停掉当前声音 → 后台合成目标块（用户可继续操作）
+    // 注意：这里**不 abort 在途合成**。abort 只是放弃结果，请求已经发到云端照样计费，
+    // 重跳回来又得重发（实测同一句被合成 5 次）。让它在后台跑完进缓存，反而更省。
+    // 过期结果由 seekGen 守卫丢弃，不会干扰当前播放。
     activeEl.pause();
     // 同时停 speechSynthesis（preview 模式的声音来源是 speechSynthesis，不是 <audio>）
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
     setStatus('loading');
-    // 关键：不 await！合成在后台跑，用户随时可以再点按钮打断
-    ensureChunk(targetChunk).then((chunk) => {
-      // 同 pending 分支：用户已改主意就不要用旧起点播放
-      if (destroy || gen !== seekGen) return;
-      return playChunk(chunk, { startSentence: clamped, autoplay: wantPlaying || opts.play === true });
-    }).then(() => {
-      if (!destroy) void prefetch();
-    }).catch((e) => {
-      if (e && e.name === 'AbortError') return;
-      setStatus('error', `跳转失败: ${e.message}`);
-      bus.emit(Events.ERROR, { message: e.message, recoverable: true });
-    });
+    const startBuild = () => {
+      // 关键：不 await！合成在后台跑，用户随时可以再点按钮打断
+      ensureChunk(targetChunk).then((chunk) => {
+        // 同 pending 分支：用户已改主意就不要用旧起点播放
+        if (destroy || gen !== seekGen) return;
+        return playChunk(chunk, { startSentence: clamped, autoplay: wantPlaying || opts.play === true });
+      }).then(() => {
+        if (!destroy) void prefetch();
+      }).catch((e) => {
+        if (e && e.name === 'AbortError') return;
+        setStatus('error', `跳转失败: ${e.message}`);
+        bus.emit(Events.ERROR, { message: e.message, recoverable: true });
+      });
+    };
+    // 150ms 防抖：连点"下一句/下一章"时每次点击都会 cancelAll 再重建，
+    // 结果同一句被反复发往云端（实测同句 4 次），既慢又烧额度。
+    // 防抖只推迟"开始合成"，UI 高亮仍是 0ms 立即更新。
+    if (seekBuildTimer) clearTimeout(seekBuildTimer);
+    seekBuildTimer = setTimeout(() => {
+      seekBuildTimer = 0;
+      if (gen !== seekGen || destroy) return;
+      startBuild();
+    }, 150);
   }
 
   async function nextSentence() {
@@ -1075,8 +1142,16 @@ export function createPlayer(deps) {
     await seekToSentence(nearestSentence(offset));
   }
 
-  /** 相对秒数定位（锁屏 seekbackward/forward）：换算成句内偏移。 */
+  /** 相对秒数定位（锁屏 seekbackward/forward + 「回退15秒」）：换算成句内偏移。 */
   async function seekRelative(deltaSec) {
+    // 还没开始播过（currentChunk 为空）时，seekToSeconds 会直接 return，
+    // 表现为「点了回退15秒没反应」。这里按字速估算目标句，保证按钮一定有效。
+    if (!currentChunk) {
+      const charsPerSec = CHARS_PER_SEC * (state.rate || 1);
+      const targetOffset = Math.max(0, (state.charOffset || 0) + deltaSec * charsPerSec);
+      await seekToSentence(nearestSentence(targetOffset), { play: wantPlaying });
+      return;
+    }
     const t = activeEl.currentTime + deltaSec;
     await seekToSeconds(t);
   }
@@ -1167,7 +1242,11 @@ export function createPlayer(deps) {
   }
 
   function setVoice(voiceId) {
-    state.voice = voiceId;
+    const next = voiceId || null;
+    // 同值短路：选音色时会经 reader + updateSettings 两条路各调一次，
+    // 不短路就会重复 cancelAll + 清缓存 + 重新合成（白烧一次额度）。
+    if (state.voice === next) return;
+    state.voice = next;
     // 音色变化：合成缓存失效，但保持当前位置继续
     cancelAll();
     const resume = wantPlaying;

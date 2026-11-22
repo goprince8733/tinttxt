@@ -47,6 +47,22 @@ export function voices() {
   ];
 }
 
+/** 出站请求超时信号（Workers/workerd 支持 AbortSignal.timeout）；不支持时回退 undefined。 */
+function timeoutSignal(ms) {
+  try {
+    return typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(ms) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 清除缓存的 token（token 失效时调用，避免 25 天内一直用坏 token）。 */
+async function clearToken(env) {
+  const KV = env.DATA;
+  if (!KV) return;
+  try { await KV.delete('baidu:token'); } catch { /* ignore */ }
+}
+
 /** 获取 access_token（缓存在 KV，25 天过期自动刷新；无 KV 时每次实时获取）。 */
 async function getToken(env) {
   const KV = env.DATA;
@@ -65,6 +81,7 @@ async function getToken(env) {
   const resp = await fetch(`${TOKEN_URL}?grant_type=client_credentials&client_id=${env.BAIDU_API_KEY}&client_secret=${env.BAIDU_SECRET_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    signal: timeoutSignal(8000),
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
@@ -80,7 +97,7 @@ async function getToken(env) {
       await KV.put('baidu:token', JSON.stringify({
         token: data.access_token,
         expiresAt: Date.now() + TOKEN_TTL_MS,
-      }));
+      }), { expirationTtl: 30 * 24 * 60 * 60 });
     } catch { /* ignore */ }
   }
   return data.access_token;
@@ -88,44 +105,71 @@ async function getToken(env) {
 
 /**
  * 合成文本 → WAV 音频。
+ * 内置：token 失效（110/111）自动刷新重试一次、出站超时、RIFF 头校验。
  * @param {{text:string, voice?:string, rate?:number, env:object}} opts
  * @returns {Promise<{wav:ArrayBuffer, mime:string, provider:string, durationSeconds:number}>}
  */
 export async function synthesize({ text, voice, rate = 1, env }) {
-  const token = await getToken(env);
-
-  // 参数映射
   const wanted = String(voice ?? '');
   const per = ALLOWED_VOICES.has(wanted) ? wanted : '0';
   const spd = Math.round(Math.min(15, Math.max(0, (rate - 0.5) / 1.5 * 15))); // rate 0.5~2 → spd 0~15
-  const body = new URLSearchParams({
-    tex: text,
-    tok: token,
-    cuid: 'tinttxt',
-    ctp: '1',
-    lan: 'zh',
-    per,
-    spd: String(spd),
-    pit: '5',
-    vol: '5',
-    aue: '6', // 6=wav
-  });
 
-  const resp = await fetch(TTS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
+  const callOnce = async (token) => {
+    const body = new URLSearchParams({
+      tex: text,
+      tok: token,
+      cuid: 'tinttxt',
+      ctp: '1',
+      lan: 'zh',
+      per,
+      spd: String(spd),
+      pit: '5',
+      vol: '5',
+      aue: '6', // 6=wav
+    });
+    const resp = await fetch(TTS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      // 出站超时：没有超时会导致请求半开、chunk 永久 "合成中"（用户看到一直转圈）
+      signal: timeoutSignal(20000),
+    });
+    const contentType = resp.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const err = await resp.json().catch(() => ({}));
+      const e = new Error(`百度合成失败: ${err.err_no || resp.status} ${err.err_msg || '未知错误'}`);
+      e.baiduErrNo = Number(err.err_no) || 0;
+      throw e;
+    }
+    if (!resp.ok) throw new Error(`百度合成 HTTP ${resp.status}`);
+    const wav = await resp.arrayBuffer();
+    return wav;
+  };
 
-  const contentType = resp.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(`百度合成失败: ${err.err_no || resp.status} ${err.err_msg || '未知错误'}`);
+  let token = await getToken(env);
+  let wav;
+  try {
+    wav = await callOnce(token);
+  } catch (e) {
+    // token 失效（110=access token 无效, 111=过期）：清缓存后重取一次
+    if (e && (e.baiduErrNo === 110 || e.baiduErrNo === 111)) {
+      await clearToken(env);
+      token = await getToken(env);
+      wav = await callOnce(token);
+    } else {
+      throw e;
+    }
   }
 
-  const wav = await resp.arrayBuffer();
   if (wav.byteLength < 100) {
     throw new Error(`百度合成返回数据过小（${wav.byteLength} bytes），可能文本为空或参数错误`);
+  }
+  // 防呆：错误页/HTML 被当音频返回 → 播放层会报"音频播放失败"，这里提前拦。
+  // 注意：wav 是 ArrayBuffer，不能用 wav[0] 取值（恒 undefined），必须先建 Uint8Array 视图。
+  const head = new Uint8Array(wav, 0, 4);
+  const riff = String.fromCharCode(head[0], head[1], head[2], head[3]);
+  if (riff !== 'RIFF') {
+    throw new Error(`百度返回的不是 WAV（头部=${JSON.stringify(riff)}）`);
   }
 
   // 估算时长（WAV 头 44 字节 + 16-bit 单声道 16kHz）

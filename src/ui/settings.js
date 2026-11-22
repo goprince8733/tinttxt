@@ -296,16 +296,21 @@ export function createSettings(ctx) {
 
   for (const b of segBtns) b.addEventListener('click', onThemePick);
 
+  // 语速：拖动只更新显示，松手才真正生效（setRate 会作废当前块并重新合成，逐帧调用=反复重合成）
   setRate.addEventListener('input', () => {
     const r = Number(setRate.value);
-    app.player.setRate(r);
     setRateVal.textContent = `${r.toFixed(2)}×`;
     const p = $('#rate-range');
     const pv = $('#rate-val');
     if (p) p.value = String(r);
     if (pv) pv.textContent = `${r.toFixed(2)}×`;
   });
-  setRate.addEventListener('change', () => void app.updateSettings({ rate: Number(setRate.value) }));
+  setRate.addEventListener('change', () => {
+    const r = Number(setRate.value);
+    app.player.setRate(r);
+    setRateVal.textContent = `${r.toFixed(2)}×`;
+    void app.updateSettings({ rate: r });
+  });
 
   setVol.addEventListener('input', () => {
     const v = Number(setVol.value);
@@ -401,7 +406,8 @@ export function createSettings(ctx) {
       void (async () => {
         await app.updateSettings({ cloudTtsEnabled: false });
         cloudNote.hidden = true;
-        ctx.toast('云端 TTS 已关闭，恢复本地朗读', 'success');
+        if (cloudEndpointRow) cloudEndpointRow.hidden = true;
+        ctx.toast('云端语音已关闭，恢复本地朗读', 'success');
         ctx.onVoicesChanged();
       })();
     }
@@ -471,6 +477,12 @@ export function createSettings(ctx) {
       }, 500);
     }
   }
+
+  // 自动下载（开书/引擎回落/切档位）也要在设置面板显示实时进度：
+  // 原来只有点本面板的下载按钮才启动轮询，自动下载时面板里一直显示"尚未下载"。
+  app.bus.on('playback:state', (patch) => {
+    if (patch && patch.model) startDownloadTick();
+  });
 
   btnSettingsDownload.addEventListener('click', () => {
     const s = app.getSettings();

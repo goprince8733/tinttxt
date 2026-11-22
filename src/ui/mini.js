@@ -79,7 +79,8 @@ export function createMiniPlayer(ctx) {
 
   function togglePlay() {
     const st = player.getState();
-    if (st.status === 'playing') {
+    // 与 reader 一致：loading/buffering 也视为「正在播」，再点就是暂停（中止合成）
+    if (st.status === 'playing' || st.status === 'loading' || st.status === 'buffering') {
       player.pause();
     } else {
       // 立即变暂停图标（不等异步状态）
