@@ -206,7 +206,7 @@
           </div>
 
           <!-- 语音来源 + 音色：放在播放键上方常驻可见区（底部区域曾被安装横幅遮住） -->
-          <div class="engine-row">
+          <div class="engine-row" id="engine-row-source">
             <span class="ctl-label">语音来源</span>
             <div class="seg seg-compact" id="engine-switch" role="radiogroup" aria-label="语音来源">
               <button type="button" class="seg-btn" role="radio" aria-checked="true" data-engine="system">系统语音</button>
@@ -514,10 +514,10 @@
       <section class="set-group">
         <h3 class="set-title">TTS 引擎</h3>
         <label class="radio-row"><input type="radio" name="tts-engine" id="engine-system" value="system" /><span>手机自带语音（推荐：华为等机型系统音色最好听，无需下载、不联网、不花钱）</span></label>
-        <label class="radio-row"><input type="radio" name="tts-engine" id="engine-cloud" value="cloud" /><span>百度云端语音（真人音色，可后台/锁屏播放；需联网，按字消耗额度）</span></label>
+        <label class="radio-row" id="engine-cloud-row"><input type="radio" name="tts-engine" id="engine-cloud" value="cloud" /><span>百度云端语音（真人音色，可后台/锁屏播放；需联网，按字消耗额度）</span></label>
         <label class="radio-row"><input type="radio" name="tts-engine" id="engine-sherpa" value="local-sherpa" /><span>本地离线 · sherpa-onnx（可选，默认关闭；首次需下载约 39MB 模型，合成较慢）</span></label>
         <label class="radio-row"><input type="radio" name="tts-engine" id="engine-piper" value="local-piper" /><span>本地离线 · Piper 中文（可选，默认关闭；合成快但真机发音清晰度差）</span></label>
-        <p class="field-note" id="engine-note">默认为 sherpa：真机 A/B 试听实测吐字清晰、听得懂；Piper 虽快但发音质量不达标（x_low 档还缺声调）。两档均为本地合成，文本不出设备（云端 TTS 时文本会发送到服务器）。</p>
+        <p class="field-note" id="engine-note">默认使用手机自带语音：不联网、不花钱、音色最好。百度语音已关闭（避免消耗额度），只有站长本机能开启。</p>
       </section>
 
       <section class="set-group" id="model-section">

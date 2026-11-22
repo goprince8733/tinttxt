@@ -18,6 +18,7 @@ import { createLocalPiperAdapter, MODEL_TIERS } from './layers/playback/tts/loca
 import { createCloudTtsAdapter, createSpeechPreviewAdapter } from './layers/playback/tts/cloud.js';
 import { TtsRegistry } from './layers/playback/tts/index.js';
 import { clearAudioCache } from './layers/playback/tts/audio-cache.js';
+import { getOwnerKey, setOwnerKey, isCloudUnlocked } from './core/owner.js';
 
 /** sha-256 hex，用于内容哈希与文件改动检测。 */
 async function sha256Hex(text) {
@@ -28,7 +29,24 @@ async function sha256Hex(text) {
 
 export async function createApp() {
   const bus = createBus();
+
+  // 专属链接解锁：?owner=<key> —— 只有站长自己会打开这个链接。
+  // 解锁后本机才显示百度语音；同时把 key 从地址栏抹掉，避免被书签/分享带出去。
+  try {
+    const u = new URL(window.location.href);
+    const k = u.searchParams.get('owner');
+    if (k) {
+      setOwnerKey(k);
+      u.searchParams.delete('owner');
+      window.history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+    }
+  } catch { /* 解析失败：忽略 */ }
+
   let settings = await store.getSettings();
+  // 默认关闭云端语音：旧设备存着 ttsEngine='cloud' 也要拉回系统语音（否则会一直吃额度）
+  if (settings.ttsEngine === 'cloud' && !isCloudUnlocked()) {
+    settings = await store.saveSettings({ ttsEngine: 'system', cloudTtsEnabled: false, voice: null });
+  }
   /** 构建号（部署时注入到 index.html 的 meta）：用于确认设备上跑的是哪一版。 */
   const buildInfo = (() => {
     try {
@@ -105,6 +123,8 @@ export async function createApp() {
     const engine = settings.ttsEngine || 'system';
 
     if (engine === 'cloud') {
+      // 默认关闭云端语音：只有本机用专属链接解锁过才允许。别人打开站点只会看到系统语音。
+      if (!isCloudUnlocked()) return activateEngine('speech-preview');
       if (cloudConfig.endpoint && cloudFailStreak < 2) return activateEngine('cloud-http');
       // 云端暂不可用（网络/额度）→ 回落系统语音，不强制下载本地模型
       return activateEngine('speech-preview');
@@ -502,6 +522,11 @@ export async function createApp() {
       await resolveAdapter();
       await checkModel().catch(() => {}); // await：fire-and-forget 会被同步合成阻塞，调用方读到旧状态
     }
+    // 云端语音默认对所有人关闭：没解锁的设备即使调用也强制回落系统语音
+    if (patch.ttsEngine === 'cloud' && !isCloudUnlocked()) {
+      patch = { ...patch, ttsEngine: 'system' };
+      bus.emit(Events.TOAST, { message: '百度语音未开放（节省额度），已使用系统语音', level: 'info' });
+    }
     if (patch.ttsEngine !== undefined && patch.ttsEngine !== prev.ttsEngine) {
       // 引擎切换：重置下载状态、作废旧音频块并重新解析适配器
       modelState.status = 'idle';
@@ -855,6 +880,9 @@ export async function createApp() {
     resolveAdapter,
     setBookOpenHook,
     getBuildInfo,
+    isCloudUnlocked,
+    unlockCloud: (key) => setOwnerKey(key),
+    lockCloud: () => setOwnerKey(''),
     clearOfflineModels,
     clearSpeechCache,
     // 导入/书架

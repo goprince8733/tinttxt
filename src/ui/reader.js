@@ -104,6 +104,13 @@ export function createPlayerView(ctx) {
     const el = $('#engine-switch');
     if (!el) return;
     const cur = app.getSettings().ttsEngine || 'system';
+    // 百度语音默认对所有人隐藏（额度=钱）：只有站长用专属链接解锁过的设备才看得到。
+    // 只剩系统语音时整行「语音来源」都不显示——单个选项没有意义，还占屏幕。
+    const unlocked = app.isCloudUnlocked ? app.isCloudUnlocked() : false;
+    const cloudBtn = el.querySelector('[data-engine="cloud"]');
+    if (cloudBtn) cloudBtn.hidden = !unlocked;
+    const row = $('#engine-row-source');
+    if (row) row.hidden = !unlocked;
     for (const b of el.querySelectorAll('[data-engine]')) {
       b.setAttribute('aria-checked', String(b.dataset.engine === cur));
     }

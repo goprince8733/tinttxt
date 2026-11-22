@@ -152,6 +152,25 @@ function deviceIdOf(request) {
   return /^[A-Za-z0-9_-]{8,64}$/.test(id) ? id : null;
 }
 
+/**
+ * 云端语音「仅本人可用」密钥。
+ * 优先环境变量 CLOUD_OWNER_KEY（若将来手动配置），否则读 KV 的 config:cloud-owner-key
+ * （部署脚本写入）。isolate 内缓存一次，避免每次请求都读 KV。
+ */
+let cachedOwnerKey = null;
+async function ownerKeyOf(env) {
+  const fromEnv = String(env.CLOUD_OWNER_KEY || '').trim();
+  if (fromEnv) return fromEnv;
+  if (cachedOwnerKey !== null) return cachedOwnerKey;
+  try {
+    const v = env.DATA && typeof env.DATA.get === 'function' ? await env.DATA.get('config:cloud-owner-key') : null;
+    cachedOwnerKey = String(v || '').trim();
+  } catch {
+    cachedOwnerKey = '';
+  }
+  return cachedOwnerKey;
+}
+
 async function handleTts(request, env, { trial = false } = {}) {
   const limits = limitsFromEnv(env);
   const provider = resolveProvider(env);
@@ -162,6 +181,16 @@ async function handleTts(request, env, { trial = false } = {}) {
   // 跨站请求直接拒绝：额度按设备算，device id 是客户端自造的，跨站刷额度必须挡住
   const site = request.headers.get('sec-fetch-site') || '';
   if (site === 'cross-site') return json({ error: '不允许跨站调用' }, 403);
+  // 本人专属开关：配置了 CLOUD_OWNER_KEY 后，没有正确密钥的请求一律拒绝。
+  // 目的：公开站点分享给别人时，默认谁都别想用百度语音（额度=钱）。
+  // 前端只有在「打开过带 ?owner=<key> 的专属链接」后才会带这个头。
+  const ownerKey = await ownerKeyOf(env);
+  if (ownerKey) {
+    const got = String(request.headers.get('x-tinttxt-owner') || '').trim();
+    if (got !== ownerKey) {
+      return json({ error: '云端语音未开放：这是站长的可选功能，请在「语音来源」改用系统语音' }, 403);
+    }
+  }
   const now = Date.now();
 
   let body;
@@ -246,7 +275,9 @@ export async function onRequest(context) {
   try {
     if (path === '/health') {
       const provider = resolveProvider(env);
-      return withCors(json({ ok: true, provider: provider.name, configured: provider.configured(env), time: new Date().toISOString() }), cors);
+      // locked=true 表示云端语音已设为"仅本人可用"（未带正确密钥一律 403）
+      const locked = !!(await ownerKeyOf(env));
+      return withCors(json({ ok: true, provider: provider.name, configured: provider.configured(env), locked, time: new Date().toISOString() }), cors);
     }
     if (path === '/voices' && request.method === 'GET') {
       const provider = resolveProvider(env);

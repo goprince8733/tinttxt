@@ -12,6 +12,7 @@
 
 import { throwIfAborted, abortError } from './index.js';
 import { memoAudio, peekAudio } from './audio-cache.js';
+import { getOwnerKey } from '../../../core/owner.js';
 
 /** 获取设备 ID（localStorage 持久化）。 */
 function getDeviceId() {
@@ -80,6 +81,8 @@ export function createCloudTtsAdapter(config) {
             'content-type': 'application/json',
             'x-device-id': getDeviceId(),
             ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+            // 只有本机用专属链接解锁过才带这个头；服务端没它直接 403
+            ...(getOwnerKey() ? { 'x-tinttxt-owner': getOwnerKey() } : {}),
           },
           body: JSON.stringify({
             text,

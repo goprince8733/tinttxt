@@ -319,6 +319,51 @@ async function ensurePagesKv(creds, project) {
   }
 }
 
+/**
+ * 把「云端语音专属密钥」写进 KV（config:cloud-owner-key）。
+ * 为什么不写 Pages 环境变量：现有 BAIDU_API_KEY 等是 secret_text，值读不回来，
+ * 用 PATCH 覆盖 env_vars 有清空密钥的风险。KV 写入是独立操作，安全得多。
+ */
+async function writeOwnerKeyToKv(creds) {
+  try {
+    const toml = await fsp.readFile(path.join(ROOT, 'worker', 'wrangler.toml'), 'utf8');
+    const m = toml.match(/id\s*=\s*"([0-9a-f]{32})"/);
+    if (!m) {
+      log('⚠ 没有 KV id，跳过云端语音密钥写入（云端语音将保持开放，请勿分享站点）');
+      return;
+    }
+    const key = await loadOrCreateOwnerKey();
+    const url = `https://api.cloudflare.com/client/v4/accounts/${creds.account}/storage/kv/namespaces/${m[1]}/values/${encodeURIComponent('config:cloud-owner-key')}`;
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${creds.token}`, 'content-type': 'text/plain' },
+      body: key,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 160)}`);
+    log('云端语音密钥已写入 KV（未携带密钥的请求会被 403 拒绝）');
+  } catch (e) {
+    log(`⚠ 写入云端语音密钥失败：${e.message}（云端语音可能仍对所有人开放）`);
+  }
+}
+
+/**
+ * 云端语音开关密钥（本人专属）。
+ * 存在 .tooling/cloud-owner-key.txt（不进 git），首次部署自动生成。
+ * 前端不带这个 key 就看不到百度语音；服务端没有它就直接 403，防止别人盗用额度。
+ */
+async function loadOrCreateOwnerKey() {
+  const p = path.join(ROOT, '.tooling', 'cloud-owner-key.txt');
+  try {
+    const v = (await fsp.readFile(p, 'utf8')).trim();
+    if (v) return v;
+  } catch { /* 不存在则生成 */ }
+  const key = Array.from({ length: 24 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
+  await fsp.mkdir(path.dirname(p), { recursive: true });
+  await fsp.writeFile(p, key + '\n', 'utf8');
+  log(`已生成云端语音密钥：${p}`);
+  return key;
+}
+
 /** 部署后自检：云端 API 必须真的在用百度（而不是静默回落 mock/占位音）。 */
 async function verifyCloudApi(project) {
   const base = `https://${project}.pages.dev`;
@@ -334,9 +379,14 @@ async function verifyCloudApi(project) {
       }
       // 光看 /api/health 不够：必须真合成一次，确认「供应商→WAV」整条链路没坏
       // （曾出现 health 正常但合成恒失败的情况，静默上线）。
+      const probeKey = await loadOrCreateOwnerKey();
       const probe = await fetch(`${base}/api/tts`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-device-id': `deploy-probe-${Math.random().toString(36).slice(2, 10)}` },
+        headers: {
+          'content-type': 'application/json',
+          'x-device-id': `deploy-probe-${Math.random().toString(36).slice(2, 10)}`,
+          'x-tinttxt-owner': probeKey,
+        },
         body: JSON.stringify({ text: '部署自检', voice: '0', rate: 1 }),
       });
       if (!probe.ok) {
@@ -438,6 +488,8 @@ async function deploy(creds) {
 
   // 5.1.5 绑定 KV（额度/限流依赖它；缺了会静默失效，必须显式确认）
   await ensurePagesKv(creds, PROJECT);
+  // 5.1.6 云端语音「仅本人可用」密钥（写入 KV，不碰任何 secret 环境变量）
+  await writeOwnerKeyToKv(creds);
 
   // 5.2 上传 dist/（含 Pages Functions：复制 functions/ → dist/functions/）
   log(`上传 dist/ → ${PROJECT} …`);
@@ -455,6 +507,10 @@ async function deploy(creds) {
   // 5.3 部署后自检：确认云端真的可用（密钥/供应商生效），否则明确报错而不是静默降级
   await verifyCloudApi(PROJECT);
   log(`部署完成：${url}`);
+  try {
+    const ownerKey = await loadOrCreateOwnerKey();
+    log(`你的专属启用链接（百度语音只在打开过这个链接的设备上出现）：${url}/?owner=${ownerKey}`);
+  } catch { /* ignore */ }
   return url;
 }
 

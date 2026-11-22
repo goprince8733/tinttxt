@@ -273,6 +273,17 @@ export function createSettings(ctx) {
     void refreshDialogueNote();
     void refreshCustomVoices();
 
+    // 百度语音只对解锁过的设备可见（额度=钱，公开站点默认全隐藏）
+    const unlocked = app.isCloudUnlocked ? app.isCloudUnlocked() : false;
+    const cloudRow = $('#engine-cloud-row');
+    if (cloudRow) cloudRow.hidden = !unlocked;
+    const engineNote = $('#engine-note');
+    if (engineNote) {
+      engineNote.textContent = unlocked
+        ? '默认使用手机自带语音：不联网、不花钱、音色最好。百度语音仅本机可见（按字消耗额度，请按需使用）。'
+        : '默认使用手机自带语音：不联网、不花钱、音色最好。百度语音已关闭（避免消耗额度）。';
+    }
+
     // 版本号：排查问题时要靠它确认设备跑的是哪一版（避免被浏览器缓存骗了）
     const buildEl = $('#app-build');
     if (buildEl) {
