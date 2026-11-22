@@ -734,6 +734,10 @@ export function createPlayer(deps) {
 
   /** 系统语音会话代号：暂停/跳句/切块都会 +1，作废旧 utterance 的回调。 */
   let previewGen = 0;
+  /** 被系统打断（多为熄屏）时停在的句子：恢复时从这句重讲，绝不静默跳过。 */
+  let previewResumeIdx = -1;
+  /** 被打断时所在的块（跨块恢复用）。 */
+  let previewChunkRef = null;
 
   function previewSpeakFrom(chunk, startIdx) {
     if (typeof window === 'undefined' || !window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') {
@@ -742,6 +746,8 @@ export function createPlayer(deps) {
     }
     if (wantPlaying) startKeepAlive(); // 从跳句/续播进入系统语音时也保活
     const gen = ++previewGen;
+    previewChunkRef = chunk;
+    previewResumeIdx = -1; // 新一轮朗读：清掉上次的断点（真正的断点由 suspendHere 记录）
     let i = Math.max(chunk.sentenceStart, Math.min(startIdx, chunk.sentenceEnd - 1));
 
     const stopIfStale = () => destroy || gen !== previewGen || !wantPlaying;
@@ -782,8 +788,11 @@ export function createPlayer(deps) {
       }
 
       let spoke = false;
+      const speakT0 = Date.now();
       const watchdog = setTimeout(() => {
         if (gen !== previewGen || spoke) return;
+        // 息屏后台时系统可能临时挂起 TTS：此时不能判"没声音"（误报会让播放中断）
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
         // 有些浏览器不触发 onstart：只要 speechSynthesis.speaking 为真就算已经在念
         try {
           if (window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending)) return;
@@ -799,17 +808,38 @@ export function createPlayer(deps) {
       }, 2000);
 
       u.onstart = () => { spoke = true; clearTimeout(watchdog); };
+
+      /**
+       * 关键：区分「这句真的念完了」和「被系统打断」。
+       * 息屏瞬间 ArkWeb 会打断当前 utterance（onerror=interrupted/canceled，或立刻 onend），
+       * 若把它当"念完了"继续 i++，就会把整块剩余句子**静默跳过**，
+       * 到块尾再 advanceChunk → 表现为"熄屏跳过一个语音块"。
+       */
+      const interrupted = (e) => {
+        const kind = e && e.error;
+        if (kind === 'interrupted' || kind === 'canceled' || kind === 'audio-busy') return true;
+        // 没有 onstart 且在 250ms 内就结束 → 基本是被打断，而不是真念完
+        return !spoke && Date.now() - speakT0 < 250;
+      };
+      const suspendHere = () => {
+        previewResumeIdx = i; // 记住被打断的句子，亮屏/恢复时从这句重讲
+        previewChunkRef = chunk;
+        setStatus('playing'); // 保持"想播"的意图，不显示错误
+      };
+
       u.onend = () => {
         clearTimeout(watchdog);
         if (gen !== previewGen || destroy) return;
+        if (interrupted()) { suspendHere(); return; }
         i += 1;
         if (wantPlaying) speakNext();
         else setStatus('paused');
       };
-      u.onerror = () => {
+      u.onerror = (e) => {
         clearTimeout(watchdog);
         if (gen !== previewGen || destroy) return;
-        i += 1; // 单句失败不卡死，继续下一句
+        if (interrupted(e)) { suspendHere(); return; }
+        i += 1; // 真正失败的句子不卡死，继续下一句
         if (wantPlaying) speakNext();
       };
 
@@ -1046,6 +1076,7 @@ export function createPlayer(deps) {
   function pause() {
     wantPlaying = false;
     previewGen += 1; // 作废系统语音的逐句回调（否则暂停后仍会念下一句）
+    previewResumeIdx = -1;
     stopKeepAlive(); // 暂停就不该继续占用媒体会话
     // 暂停即中止在途合成：否则整块剩余句子仍会继续向云端要音频（白烧额度/流量/电），
     // 已合成的句子都在缓存里，重新播放时不会重合成。
@@ -1427,7 +1458,10 @@ export function createPlayer(deps) {
         return;
       }
       // 亮屏：同步 UI 状态到实际播放位置（息屏期间 advanceChunk 可能推了 sentenceIndex）
-      if (activeEl && !activeEl.paused && currentChunk && currentChunk.status === 'ready' && currentChunk.url) {        const t = activeEl.currentTime;
+      // 注意：系统语音（preview）不走 <audio>，碰 activeEl 会误触发 waiting → 状态卡在 buffering。
+      const isPreviewEngine = activeEngineId === 'speech-preview';
+      if (!isPreviewEngine && activeEl && !activeEl.paused && currentChunk && currentChunk.status === 'ready' && currentChunk.url) {
+        const t = activeEl.currentTime;
         const sid = currentSentenceInChunk(currentChunk, t);
         if (sid !== state.sentenceIndex && sentences[sid]) {
           const s = sentences[sid];
@@ -1437,11 +1471,28 @@ export function createPlayer(deps) {
           onStatePatch?.({ sentenceIndex: sid, charOffset: s.start });
         }
         if (wantPlaying && state.status !== 'playing') setStatus('playing');
-      } else if (wantPlaying && activeEl.paused && state.status !== 'error') {
+      } else if (!isPreviewEngine && wantPlaying && activeEl.paused && state.status !== 'error') {
         void activeEl.play().catch(() => {});
       }
       // 系统语音：亮屏时若保活被系统暂停/回收，重新拉起，尽量维持后台能力
-      if (wantPlaying && activeEngineId === 'speech-preview') startKeepAlive();
+      if (wantPlaying && activeEngineId === 'speech-preview') {
+        startKeepAlive();
+        // 息屏期间 TTS 被系统打断（可能连 onend/onerror 都不触发）：亮屏后从被打断的那句继续，
+        // 绝不"跳过整块"。仅在确实没在念的时候恢复，避免与正常播放抢话。
+        let speaking = false;
+        try {
+          speaking = !!(window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending));
+        } catch { /* ignore */ }
+        if (!speaking && state.status !== 'error') {
+          const idx = previewResumeIdx >= 0 ? previewResumeIdx : state.sentenceIndex;
+          const ref = previewChunkRef;
+          const chunk = (ref && idx >= ref.sentenceStart && idx < ref.sentenceEnd) ? ref : currentChunk;
+          previewResumeIdx = -1;
+          if (chunk && chunk.preview && idx >= chunk.sentenceStart && idx < chunk.sentenceEnd) {
+            previewSpeakFrom(chunk, idx);
+          }
+        }
+      }
       // 恢复预取（hidden 时中止了）
       if (wantPlaying) void prefetch();
       stateWriter?.flush();
