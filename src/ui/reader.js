@@ -60,10 +60,15 @@ export function createPlayerView(ctx) {
   /* ---------------- 滚动跟随状态 ---------------- */
 
   let followOn = true;
-  let manualPaused = false;   // 用户手动滚动过 → 暂停自动滚动
-  let programmatic = false;   // 我们触发的滚动（不计为手动）
-  let scrollTimer = 0;
+  let manualPaused = false;   // 用户手动滚动过 → 软暂停（8 秒无操作自动恢复）
+  let progTop = null;         // 本次"程序化滚动"的目标位置
+  let progClearTimer = 0;
+  let lastProgAt = 0;         // 上次程序化滚动的发起时间
+  let resumeTimer = 0;
+  let lastScrollTop = 0;      // 用于区分"用户滑动"与"句子渲染引起的微小位移"
   let activeSpan = null;
+  /** 手动滑动后自动恢复跟随的等待时长 */
+  const FOLLOW_RESUME_MS = 8000;
 
   /* ---------------- 进度条拖动状态 ---------------- */
 
@@ -252,8 +257,7 @@ export function createPlayerView(ctx) {
   }
 
   function onSentenceClick(idx) {
-    manualPaused = false;
-    updateFollowHint();
+    resumeFollow(); // 点正文句子 = 想跟这附近读，恢复跟随
     void player.seekToSentence(idx);
   }
 
@@ -278,31 +282,79 @@ export function createPlayerView(ctx) {
     }
   }
 
+  /**
+   * 把"正在朗读的句子"滚到容器高度约 35% 处。
+   * 之前用 scrollIntoView({block:'nearest'})：只要句子还在屏幕里就完全不滚，
+   * 结果当前句长期贴在底部（甚至被控制区压住），看起来就是"没跟住"。
+   */
+  function targetTopFor(span) {
+    const cRect = readerScroll.getBoundingClientRect();
+    const sRect = span.getBoundingClientRect();
+    const want = readerScroll.scrollTop + (sRect.top - cRect.top) - cRect.height * 0.35 + sRect.height / 2;
+    const max = Math.max(0, readerScroll.scrollHeight - readerScroll.clientHeight);
+    return Math.max(0, Math.min(want, max));
+  }
+
   function maybeScrollToActive() {
     if (!followOn || manualPaused || !activeSpan) return;
-    programmatic = true;
+    const top = targetTopFor(activeSpan);
+    if (Math.abs(readerScroll.scrollTop - top) < 4) return; // 已在位，别抖
+    progTop = top;
+    lastProgAt = Date.now();
+    lastScrollTop = top;
+    clearTimeout(progClearTimer);
+    progClearTimer = setTimeout(() => { progTop = null; }, 1500);
     try {
-      activeSpan.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    } catch { /* 元素不可见时忽略 */ }
-    if (scrollTimer) clearTimeout(scrollTimer);
-    scrollTimer = setTimeout(() => { programmatic = false; }, 600);
+      readerScroll.scrollTo({ top, behavior: 'smooth' });
+    } catch {
+      readerScroll.scrollTop = top;
+    }
   }
 
   function updateFollowHint() {
-    followHint.hidden = !(followOn && manualPaused);
+    if (!followHint) return;
+    const show = followOn && manualPaused;
+    followHint.hidden = !show;
+    followHint.classList.toggle('counting', show);
   }
 
-  readerScroll.addEventListener('scrollend', () => { programmatic = false; });
+  /** 恢复跟随（点提示 / 点句子 / 重新勾选） */
+  function resumeFollow() {
+    clearTimeout(resumeTimer);
+    manualPaused = false;
+    updateFollowHint();
+    maybeScrollToActive();
+  }
+
+  /** 软暂停：提示可点，8 秒无操作自动恢复 */
+  function pauseFollow() {
+    if (!followOn) return;
+    manualPaused = true;
+    updateFollowHint();
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(resumeFollow, FOLLOW_RESUME_MS);
+  }
+
   readerScroll.addEventListener('scroll', () => {
-    if (programmatic || !followOn) return;
-    if (!manualPaused) {
-      manualPaused = true;
-      updateFollowHint();
-    }
+    if (!followOn) return;
+    const top = readerScroll.scrollTop;
+    const delta = Math.abs(top - lastScrollTop);
+    lastScrollTop = top;
+    // 自己滚的：目标位置已到（±8px）或刚发起 250ms 内 → 不算手动
+    if (progTop != null && (Math.abs(top - progTop) < 8 || Date.now() - lastProgAt < 250)) return;
+    if (Date.now() - lastProgAt < 250) return;
+    // 只把"明显滑动"当作用户操作：句子渲染/换行会带来几像素的位移，
+    // 若也重置 8 秒计时，朗读过程中会永远回不到跟随状态（实测踩过）。
+    if (delta >= 24) pauseFollow();
   });
+
+  if (followHint) {
+    followHint.addEventListener('click', () => resumeFollow());
+  }
 
   followToggle.addEventListener('change', () => {
     followOn = followToggle.checked;
+    clearTimeout(resumeTimer);
     manualPaused = false;
     updateFollowHint();
     if (followOn) maybeScrollToActive();

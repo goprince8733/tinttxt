@@ -322,13 +322,34 @@
 .sleep-label .ic { width: 1rem; height: 1rem; }
 
 .hud-hint {
+  position: relative;
+  overflow: hidden;
   font-size: 0.75rem;
+  font-family: inherit;
   color: var(--warn);
   background: var(--warn-soft);
   padding: 0.1rem 0.45rem;
+  border: 0;
   border-radius: 999px;
+  cursor: pointer;
 }
 .hud-hint[hidden] { display: none; }
+/* 8 秒后自动恢复的"细进度线"（不放数字，避免朗读时分心） */
+.hud-hint.counting::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: currentColor;
+  opacity: 0.5;
+  transform-origin: left;
+  animation: follow-countdown 8s linear forwards;
+}
+@keyframes follow-countdown {
+  to { transform: scaleX(0); }
+}
 
 .error-panel {
   display: flex;
