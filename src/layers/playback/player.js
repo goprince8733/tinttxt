@@ -665,6 +665,67 @@ export function createPlayer(deps) {
    * 关键：**逐句朗读**，而不是整块一次性念完——
    * 否则高亮不会逐句推进、暂停/跳句的粒度也变成"一整块"（用户会觉得不受控）。
    */
+  /**
+   * 熄屏保活（实验）：系统语音（speechSynthesis）本身拿不到媒体后台豁免，熄屏会被系统停掉。
+   * 这里循环播放一段"静音音频"，让页面保持媒体播放状态，尽量争取熄屏后系统语音继续。
+   * 成功率依赖浏览器/系统实现（华为 ArkWeb 未验证），失败不影响正常播放。
+   * 可用 ?nokeepalive 关闭（便于 A/B 对比）。
+   */
+  const KEEPALIVE_DISABLED = typeof location !== 'undefined' && /[?&]nokeepalive/.test(location.search);
+  let keepAliveEl = null;
+
+  function silentWavUrl() {
+    const sr = 8000;
+    const n = sr; // 1 秒静音
+    const buf = new ArrayBuffer(44 + n * 2);
+    const v = new DataView(buf);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, 'data'); v.setUint32(40, n * 2, true);
+    return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  }
+
+  function startKeepAlive() {
+    if (KEEPALIVE_DISABLED) return;
+    if (keepAliveEl) {
+      if (keepAliveEl.paused) void keepAliveEl.play().catch(() => {});
+      return;
+    }
+    try {
+      const el = new Audio(silentWavUrl());
+      el.loop = true;
+      el.volume = 0; // 完全静音，只用来维持媒体会话
+      el.setAttribute('playsinline', '');
+      keepAliveEl = el;
+      // 有用户手势时允许直接播；若被自动播放策略拒绝，退化为 muted（浏览器允许静音自动播放）
+      el.play().catch(() => {
+        try {
+          el.muted = true;
+          el.play().catch(() => {});
+        } catch { /* ignore */ }
+      });
+      if (typeof navigator !== 'undefined' && navigator.mediaSession) {
+        try { navigator.mediaSession.playbackState = 'playing'; } catch { /* ignore */ }
+      }
+    } catch { /* 不支持则忽略 */ }
+  }
+
+  function stopKeepAlive() {
+    if (!keepAliveEl) return;
+    try { keepAliveEl.pause(); } catch { /* ignore */ }
+    try { if (keepAliveEl.src) URL.revokeObjectURL(keepAliveEl.src); } catch { /* ignore */ }
+    keepAliveEl = null;
+    if (typeof navigator !== 'undefined' && navigator.mediaSession) {
+      try { navigator.mediaSession.playbackState = 'paused'; } catch { /* ignore */ }
+    }
+  }
+
+  function isKeepAliveOn() {
+    return !!(keepAliveEl && !keepAliveEl.paused);
+  }
+
   function previewSpeak(chunk) {
     const inChunk = state.sentenceIndex >= chunk.sentenceStart && state.sentenceIndex < chunk.sentenceEnd;
     return previewSpeakFrom(chunk, inChunk ? state.sentenceIndex : chunk.sentenceStart);
@@ -678,6 +739,7 @@ export function createPlayer(deps) {
       setStatus('error', '当前浏览器不支持系统语音');
       return;
     }
+    if (wantPlaying) startKeepAlive(); // 从跳句/续播进入系统语音时也保活
     const gen = ++previewGen;
     let i = Math.max(chunk.sentenceStart, Math.min(startIdx, chunk.sentenceEnd - 1));
 
@@ -829,6 +891,7 @@ export function createPlayer(deps) {
 
   async function loadBook(book, opts = {}) {
     previewGen += 1; // 换书：作废旧书的系统语音逐句回调（否则旧书会继续念）
+    stopKeepAlive();
     // 取消旧任务，防串音（含预览档的 speechSynthesis——否则旧书朗读会继续出声）
     cancelAll();
     if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
@@ -932,16 +995,21 @@ export function createPlayer(deps) {
     try {
       const adapter = await withTimeout(getAdapter(), 15000, '语音引擎初始化');
       if (adapter.previewOnly) {
+        // 系统语音：尝试"静音保活"，争取熄屏后不被系统停掉（实验特性，失败无副作用）
+        startKeepAlive();
         // 系统语音是默认引擎，不能每次播放都弹提示（连点会刷屏）；每会话只提示一次
         if (!previewToastShown) {
           previewToastShown = true;
           bus.emit(Events.TOAST, {
-            message: '使用手机自带语音朗读（锁屏可能暂停；想要后台播放可切到百度语音）',
+            message: KEEPALIVE_DISABLED
+              ? '使用手机自带语音朗读（熄屏可能暂停；可切到百度语音后台播放）'
+              : '使用手机自带语音朗读（已开启熄屏保活实验；若熄屏仍停，可切到百度语音）',
             level: 'info',
           });
         }
       } else {
-        // <audio> 路径：取消手势上下文里的预热语音，避免双声道重叠
+        // <audio> 路径：不需要保活，且要取消手势上下文里的预热语音，避免双声道重叠
+        stopKeepAlive();
         if (typeof window !== 'undefined' && window.speechSynthesis) {
           window.speechSynthesis.cancel();
         }
@@ -972,6 +1040,7 @@ export function createPlayer(deps) {
   function pause() {
     wantPlaying = false;
     previewGen += 1; // 作废系统语音的逐句回调（否则暂停后仍会念下一句）
+    stopKeepAlive(); // 暂停就不该继续占用媒体会话
     // 暂停即中止在途合成：否则整块剩余句子仍会继续向云端要音频（白烧额度/流量/电），
     // 已合成的句子都在缓存里，重新播放时不会重合成。
     cancelAll();
@@ -1000,6 +1069,7 @@ export function createPlayer(deps) {
   async function stop() {
     wantPlaying = false;
     previewGen += 1;
+    stopKeepAlive();
     cancelAll();
     activeEl.pause();
     // 规则5：单元素
@@ -1010,6 +1080,8 @@ export function createPlayer(deps) {
   function destroy_() {
     destroy = true;
     wantPlaying = false;
+    previewGen += 1;
+    stopKeepAlive();
     cancelAll();
     for (const u of blobUrls.splice(0)) URL.revokeObjectURL(u);
     audioA.pause();
@@ -1267,6 +1339,7 @@ export function createPlayer(deps) {
    */
   function invalidateAudio() {
     previewGen += 1;
+    stopKeepAlive();
     cancelAll();
     if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
     const resume = wantPlaying;
@@ -1348,8 +1421,7 @@ export function createPlayer(deps) {
         return;
       }
       // 亮屏：同步 UI 状态到实际播放位置（息屏期间 advanceChunk 可能推了 sentenceIndex）
-      if (activeEl && !activeEl.paused && currentChunk && currentChunk.status === 'ready' && currentChunk.url) {
-        const t = activeEl.currentTime;
+      if (activeEl && !activeEl.paused && currentChunk && currentChunk.status === 'ready' && currentChunk.url) {        const t = activeEl.currentTime;
         const sid = currentSentenceInChunk(currentChunk, t);
         if (sid !== state.sentenceIndex && sentences[sid]) {
           const s = sentences[sid];
@@ -1362,6 +1434,8 @@ export function createPlayer(deps) {
       } else if (wantPlaying && activeEl.paused && state.status !== 'error') {
         void activeEl.play().catch(() => {});
       }
+      // 系统语音：亮屏时若保活被系统暂停/回收，重新拉起，尽量维持后台能力
+      if (wantPlaying && activeEngineId === 'speech-preview') startKeepAlive();
       // 恢复预取（hidden 时中止了）
       if (wantPlaying) void prefetch();
       stateWriter?.flush();
@@ -1422,6 +1496,8 @@ export function createPlayer(deps) {
       wantPlaying,
       status: state.status,
       error: state.error || null,
+      keepAlive: isKeepAliveOn(),
+      engine: activeEngineId,
     }),
     // 供导出音频：按块取 blob
     _getChunkBlob: async (index) => (await ensureChunk(index)).blob,

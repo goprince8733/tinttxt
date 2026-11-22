@@ -548,6 +548,15 @@
           </button>
           <span class="field-note" id="settings-download-status" role="status" aria-live="polite"></span>
         </div>
+
+        <div class="btn-row" style="margin-top:0.5rem">
+          <button type="button" class="btn btn-sm" id="btn-clear-models">清除离线模型</button>
+          <button type="button" class="btn btn-sm" id="btn-clear-speech">清除朗读缓存</button>
+        </div>
+        <p class="field-note">
+          「清除离线模型」释放 39~121MB（清完建议刷新页面）；「清除朗读缓存」只删已合成的句子音频，下次会重新合成。
+          想测试系统语音是否会被熄屏打断时，先清掉离线模型，确保不会误用本地引擎。
+        </p>
       </section>
 
       <section class="set-group">

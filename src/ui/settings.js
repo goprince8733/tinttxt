@@ -448,6 +448,34 @@ export function createSettings(ctx) {
     });
   }
 
+  // 存储清理：离线模型 / 朗读缓存
+  const btnClearModels = $('#btn-clear-models');
+  if (btnClearModels) {
+    btnClearModels.addEventListener('click', () => {
+      void (async () => {
+        const ans = await ctx.modal.confirm({
+          title: '清除已下载的离线模型？',
+          message: '会删除 sherpa / Piper / 自定义音色模型文件（释放 39~121MB）。之后想用本地语音需要重新下载。',
+          confirmLabel: '清除',
+          cancelLabel: '取消',
+        });
+        if (ans !== 'confirm') return;
+        try { await app.clearOfflineModels(); } catch (e) { ctx.toast(`清除失败：${(e && e.message) || e}`, 'error'); return; }
+        syncFromSettings();
+        // 运行时（wasm/内存）还在，刷新才算真干净
+        setTimeout(() => { try { location.reload(); } catch { /* ignore */ } }, 800);
+      })();
+    });
+  }
+  const btnClearSpeech = $('#btn-clear-speech');
+  if (btnClearSpeech) {
+    btnClearSpeech.addEventListener('click', () => {
+      void (async () => {
+        try { await app.clearSpeechCache(); } catch (e) { ctx.toast(`清除失败：${(e && e.message) || e}`, 'error'); }
+      })();
+    });
+  }
+
   /* 模型下载按钮（产品规则：凡涉及下载必须有明确按钮 + 实时看得懂的进度提示） */
   const btnSettingsDownload = $('#btn-settings-download');
   const settingsDownloadText = $('#btn-settings-download-text');

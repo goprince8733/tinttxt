@@ -17,6 +17,7 @@ import { createLocalSherpaAdapter, SHERPA_TIERS } from './layers/playback/tts/sh
 import { createLocalPiperAdapter, MODEL_TIERS } from './layers/playback/tts/local.js';
 import { createCloudTtsAdapter, createSpeechPreviewAdapter } from './layers/playback/tts/cloud.js';
 import { TtsRegistry } from './layers/playback/tts/index.js';
+import { clearAudioCache } from './layers/playback/tts/audio-cache.js';
 
 /** sha-256 hex，用于内容哈希与文件改动检测。 */
 async function sha256Hex(text) {
@@ -584,8 +585,34 @@ export async function createApp() {
     return modelState;
   }
 
-  async function checkModel() {
-    const usePiper = settings.ttsEngine === 'local-piper';
+  /**
+   * 清除已下载的离线模型（sherpa / piper / 自定义音色）。
+   * 用途：换机/省空间/以及"测试系统语音时确保不会误用已下载模型"。
+   * 注意：wasm 运行时仍在内存里，调用后建议刷新页面才彻底干净。
+   */
+  async function clearOfflineModels() {
+    const names = ['tinttxt-tts-sherpa-v1', 'tinttxt-tts-v1', 'tinttxt-tts-custom-v1'];
+    let deleted = 0;
+    for (const n of names) {
+      try { if (await caches.delete(n)) deleted += 1; } catch { /* ignore */ }
+    }
+    modelState.status = 'idle';
+    modelState.progress = 0;
+    modelState.error = null;
+    modelState.bytesDownloaded = 0;
+    autoDownloadStarted = false;
+    warmupStarted = false;
+    bus.emit(Events.STATE, { model: { ...modelState } });
+    bus.emit(Events.TOAST, { message: `已清除 ${deleted} 组离线模型，刷新后彻底生效`, level: 'success' });
+    return deleted;
+  }
+
+  /** 清除朗读音频缓存（按句缓存的 WAV）。 */
+  async function clearSpeechCache() {
+    await clearAudioCache();
+    bus.emit(Events.TOAST, { message: '已清除朗读缓存', level: 'success' });
+  }
+  async function checkModel() {    const usePiper = settings.ttsEngine === 'local-piper';
     const adapter = usePiper ? localAdapter : sherpaAdapter;
     const ready = await adapter.isReady().catch(() => false);
     modelState.status = ready ? 'ready' : 'idle';
@@ -802,6 +829,8 @@ export async function createApp() {
     registry,
     resolveAdapter,
     setBookOpenHook,
+    clearOfflineModels,
+    clearSpeechCache,
     // 导入/书架
     importFiles,
     openBook,
