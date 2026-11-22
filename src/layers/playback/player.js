@@ -784,6 +784,14 @@ export function createPlayer(deps) {
   let previewGen = 0;
   /** 当前句的重试计数（同一句最多重念 2 次；换句归零）。 */
   const retryState = { i: -1, n: 0 };
+  /** 息屏挂起（引擎被系统冻结）的检测：每 4 秒探一次，最多重念 3 次。 */
+  let stallTimer = 0;
+  const stallState = { i: -1, n: 0 };
+  const STALL_WAIT_MS = 4000;
+  const STALL_MAX = 3;
+  function clearStallTimer() {
+    if (stallTimer) { clearTimeout(stallTimer); stallTimer = 0; }
+  }
   /** 被系统打断（多为熄屏）时停在的句子：恢复时从这句重讲，绝不静默跳过。 */
   let previewResumeIdx = -1;
   /** 被打断时所在的块（跨块恢复用）。 */
@@ -848,7 +856,42 @@ export function createPlayer(deps) {
       };
       // 同一句的重试计数：换句就归零
       if (retryState.i !== i) { retryState.i = i; retryState.n = 0; }
+      // "息屏后语音引擎被系统挂起"的重试计数：换句归零
+      if (stallState.i !== i) { stallState.i = i; stallState.n = 0; }
       trace({ kind: 'speak', idx: i, chars: s.speak.length, expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: retryState.n, chunk: chunk.index, gapMs: lastSpeakEndAt ? Date.now() - lastSpeakEndAt : null });
+
+      /* ---------------- 息屏挂起检测与重试 ----------------
+       * 华为在息屏一段时间后会把 TTS 引擎/页面挂起：speak() 之后迟迟不触发 onstart，
+       * 表现为"念到一半就再也不出声"（直到亮屏）。这里在息屏期间每 4 秒检查一次，
+       * 若确认没在念就 cancel + 重念同一句（最多 3 次），把挂起救回来。 */
+      const clearStall = () => clearStallTimer();
+      const armStall = () => {
+        clearStall();
+        stallTimer = setTimeout(() => {
+          stallTimer = 0;
+          if (gen !== previewGen || destroy) return;
+          if (spoke) return;
+          if (!isHidden()) { armStall(); return; } // 亮屏时交给 2 秒看门狗，这里只观察
+          let speaking = false;
+          try { speaking = !!(window.speechSynthesis && window.speechSynthesis.speaking); } catch { /* ignore */ }
+          if (speaking) { armStall(); return; } // 确实在念（只是没触发 onstart）
+          if (stallState.n >= STALL_MAX) {
+            trace({ kind: 'stallGiveUp', idx: i, attempt: stallState.n, chunk: chunk.index });
+            return;
+          }
+          stallState.n += 1;
+          trace({ kind: 'stall', idx: i, waitedMs: Date.now() - speakT0, attempt: stallState.n, chunk: chunk.index });
+          // 标记后取消：避免 cancel 触发的 onerror/onend 走进"被打断→重试"逻辑造成双重播放
+          u._stalled = true;
+          try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+          setTimeout(() => {
+            if (gen !== previewGen || destroy || !wantPlaying) return;
+            trace({ kind: 'stallRetry', idx: i, attempt: stallState.n, chunk: chunk.index });
+            speakNext();
+          }, 300);
+        }, STALL_WAIT_MS);
+      };
+
 
       const watchdog = setTimeout(() => {
         if (gen !== previewGen || spoke) return;
@@ -870,8 +913,10 @@ export function createPlayer(deps) {
       }, 2000);
 
       u.onstart = () => {
+        if (gen !== previewGen || destroy) return;
         spoke = true;
         clearTimeout(watchdog);
+        clearStall();
         trace({ kind: 'start', idx: i, afterMs: Date.now() - speakT0, chunk: chunk.index });
       };
 
@@ -912,7 +957,9 @@ export function createPlayer(deps) {
 
       u.onend = () => {
         clearTimeout(watchdog);
-        if (gen !== previewGen || destroy) return;
+        if (u._stalled) return; // 我们主动 cancel 的（挂起重试），别当正常结束
+        if (gen !== previewGen || destroy) return; // 旧会话的回调：绝不能清掉新会话的 stallTimer
+        clearStall();
         const elapsed = Date.now() - speakT0;
         lastSpeakEndAt = Date.now();
         trace({ kind: 'end', idx: i, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), cps: elapsed > 300 ? Number((s.speak.length / (elapsed / 1000)).toFixed(1)) : null, spoke, hidden: isHidden(), chunk: chunk.index });
@@ -927,7 +974,9 @@ export function createPlayer(deps) {
       };
       u.onerror = (e) => {
         clearTimeout(watchdog);
-        if (gen !== previewGen || destroy) return;
+        if (u._stalled) return; // 主动 cancel 的，忽略
+        if (gen !== previewGen || destroy) return; // 旧会话：不清新会话的 stallTimer
+        clearStall();
         const kind = (e && e.error) || 'error';
         const elapsed = Date.now() - speakT0;
         trace({ kind: 'error', idx: i, error: kind, elapsed: Math.round(elapsed), hidden: isHidden(), chunk: chunk.index });
@@ -941,6 +990,7 @@ export function createPlayer(deps) {
       try {
         window.speechSynthesis.speak(u);
         setStatus('playing');
+        armStall();
       } catch {
         clearTimeout(watchdog);
         // 某些浏览器 cancel 后立刻 speak 会抛：清空队列后重试一次
@@ -948,6 +998,7 @@ export function createPlayer(deps) {
         setTimeout(() => {
           if (gen !== previewGen || destroy || !wantPlaying) return;
           try { window.speechSynthesis.speak(u); } catch { /* ignore */ }
+          armStall();
         }, 200);
         setStatus('playing');
       }
@@ -1022,6 +1073,7 @@ export function createPlayer(deps) {
 
   async function loadBook(book, opts = {}) {
     previewGen += 1; // 换书：作废旧书的系统语音逐句回调（否则旧书会继续念）
+    clearStallTimer();
     stopKeepAlive();
     // 取消旧任务，防串音（含预览档的 speechSynthesis——否则旧书朗读会继续出声）
     cancelAll();
@@ -1163,6 +1215,7 @@ export function createPlayer(deps) {
   function pause() {
     wantPlaying = false;
     previewGen += 1; // 作废系统语音的逐句回调（否则暂停后仍会念下一句）
+    clearStallTimer();
     previewResumeIdx = -1;
     stopKeepAlive(); // 暂停就不该继续占用媒体会话
     // 暂停即中止在途合成：否则整块剩余句子仍会继续向云端要音频（白烧额度/流量/电），
@@ -1193,6 +1246,7 @@ export function createPlayer(deps) {
   async function stop() {
     wantPlaying = false;
     previewGen += 1;
+    clearStallTimer();
     stopKeepAlive();
     cancelAll();
     activeEl.pause();
@@ -1205,6 +1259,7 @@ export function createPlayer(deps) {
     destroy = true;
     wantPlaying = false;
     previewGen += 1;
+    clearStallTimer();
     stopKeepAlive();
     cancelAll();
     for (const u of blobUrls.splice(0)) URL.revokeObjectURL(u);
@@ -1463,6 +1518,7 @@ export function createPlayer(deps) {
    */
   function invalidateAudio() {
     previewGen += 1;
+    clearStallTimer();
     stopKeepAlive();
     cancelAll();
     if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
