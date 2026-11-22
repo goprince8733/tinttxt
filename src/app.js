@@ -539,7 +539,7 @@ export async function createApp() {
     // 云端语音默认对所有人关闭：没解锁的设备即使调用也强制回落系统语音
     if (patch.ttsEngine === 'cloud' && !isCloudUnlocked()) {
       patch = { ...patch, ttsEngine: 'system' };
-      bus.emit(Events.TOAST, { message: '百度语音未开放（节省额度），已使用系统语音', level: 'info' });
+      bus.emit(Events.TOAST, { message: '云端语音未开放（节省额度），已使用系统语音', level: 'info' });
     }
     if (patch.ttsEngine !== undefined && patch.ttsEngine !== prev.ttsEngine) {
       // 引擎切换：重置下载状态、作废旧音频块并重新解析适配器

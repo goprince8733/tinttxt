@@ -106,8 +106,6 @@ export function createPlayer(deps) {
   let activeEngineId = '';
   /** 用户主动定位（跳句/跳章/拖进度）的代号：块播完的自动前进不得覆盖它。 */
   let seekGen = 0;
-  /** 系统语音提示是否已弹过（默认引擎，避免每次播放刷屏）。 */
-  let previewToastShown = false;
   /** 跨块定位的"开始合成"防抖定时器（连点只合成最终目标）。 */
   let seekBuildTimer = 0;
   /** 引擎作用域下的缓存音色键。 */
@@ -862,9 +860,9 @@ export function createPlayer(deps) {
         } catch { /* ignore */ }
         trace({ kind: 'watchdog', idx: i, hidden: isHidden(), chunk: chunk.index });
         // 2 秒还没开始出声：多半是系统没有中文语音包/被系统静音 → 明确告知而不是假装在播
-        setStatus('error', '系统语音没有出声：可能是手机缺少中文语音包，或该浏览器不支持。可在「语音来源」里切到百度语音。');
+        setStatus('error', '系统语音没有出声：可能是手机缺少中文语音包，或该浏览器不支持。可在手机设置里搜索「文字转语音」检查发音人。');
         bus.emit(Events.ERROR, {
-          message: '系统语音未出声，请检查手机语音设置，或切换到百度语音',
+          message: '系统语音未出声，请检查手机语音设置（设置里搜「文字转语音」）',
           recoverable: true,
         });
         wantPlaying = false;
@@ -1130,16 +1128,8 @@ export function createPlayer(deps) {
       if (adapter.previewOnly) {
         // 系统语音：尝试"静音保活"，争取熄屏后不被系统停掉（实验特性，失败无副作用）
         startKeepAlive();
-        // 系统语音是默认引擎，不能每次播放都弹提示（连点会刷屏）；每会话只提示一次
-        if (!previewToastShown) {
-          previewToastShown = true;
-          bus.emit(Events.TOAST, {
-            message: KEEPALIVE_DISABLED
-              ? '使用手机自带语音朗读（熄屏可能暂停；可切到百度语音后台播放）'
-              : '使用手机自带语音朗读（已尝试开启熄屏保活；若熄屏仍停，可切到百度语音）',
-            level: 'info',
-          });
-        }
+        // 不再弹"使用手机自带语音朗读…"的一次性提示：
+        // 实测熄屏已能连续播放，且文案里提到的备选引擎对普通访客不可用，纯属干扰。
       } else {
         // <audio> 路径：不需要保活，且要取消手势上下文里的预热语音，避免双声道重叠
         stopKeepAlive();
