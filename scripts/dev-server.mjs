@@ -112,7 +112,7 @@ function baseHeaders(reqPath, isHtml) {
     'Permissions-Policy':
       'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), payment=(), usb=(), autoplay=(self)',
     'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
   };
   if (isHtml) {
     headers['Cache-Control'] = 'no-cache'; // html 不缓存，保证 SW/资源更新即时生效
