@@ -853,6 +853,8 @@ export function createPlayer(deps) {
       }
 
       let spoke = false;
+      /** 连续几次探测到"引擎说在念、但我们的句子还没开始"——超过 3 次说明引擎卡在别处 */
+      let busyChecks = 0;
       const speakT0 = Date.now();
       const speakRate = state.rate || 1;
       const expectedMs = Math.max(500, (s.speak.length / (speechRateCps * speakRate)) * 1000);
@@ -874,12 +876,26 @@ export function createPlayer(deps) {
         clearStall();
         stallTimer = setTimeout(() => {
           stallTimer = 0;
-          if (gen !== previewGen || destroy) return;
-          if (spoke) return;
-          if (!isHidden()) { armStall(); return; } // 亮屏时交给 2 秒看门狗，这里只观察
-          let speaking = false;
-          try { speaking = !!(window.speechSynthesis && window.speechSynthesis.speaking); } catch { /* ignore */ }
-          if (speaking) { armStall(); return; } // 确实在念（只是没触发 onstart）
+          if (gen !== previewGen || destroy || u._stalled) return;
+          const elapsed = Date.now() - speakT0;
+          if (!spoke) {
+            // 情况一：还没开口（引擎被挂起 / 队列卡住）
+            if (!isHidden()) { armStall(); return; } // 亮屏时交给 2 秒看门狗
+            let speaking = false;
+            try { speaking = !!(window.speechSynthesis && window.speechSynthesis.speaking); } catch { /* ignore */ }
+            if (speaking) {
+              busyChecks += 1;
+              // 连续 3 次（约 12 秒）都"在念却没轮到我们" → 引擎真卡住了，不能再无限等
+              if (busyChecks < 3) { armStall(); return; }
+              trace({ kind: 'stallBusy', idx: i, checks: busyChecks, chunk: chunk.index });
+            }
+          } else {
+            // 情况二：已经开口但卡在句中 —— 实测出现过「9 个字念了 20.9 秒」，
+            // 期间一点声音都没有，用户会以为播放停了。超过应有长度过多就判为冻结。
+            const stuck = elapsed > Math.max(expectedMs * 3, expectedMs + 6000);
+            if (!stuck) { armStall(); return; }
+            trace({ kind: 'stallMid', idx: i, elapsed: Math.round(elapsed), expectedMs: Math.round(expectedMs), hidden: isHidden(), attempt: stallState.n + 1, chunk: chunk.index });
+          }
           if (stallState.n >= STALL_MAX) {
             trace({ kind: 'stallGiveUp', idx: i, attempt: stallState.n, chunk: chunk.index });
             // 别再假装在播：重试用尽说明引擎确实起不来。
@@ -889,7 +905,9 @@ export function createPlayer(deps) {
             return;
           }
           stallState.n += 1;
-          trace({ kind: 'stall', idx: i, waitedMs: Date.now() - speakT0, attempt: stallState.n, chunk: chunk.index });
+          if (!spoke) {
+            trace({ kind: 'stall', idx: i, waitedMs: elapsed, attempt: stallState.n, chunk: chunk.index });
+          }
           // 标记后取消：避免 cancel 触发的 onerror/onend 走进"被打断→重试"逻辑造成双重播放
           u._stalled = true;
           try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
@@ -925,7 +943,9 @@ export function createPlayer(deps) {
         if (gen !== previewGen || destroy) return;
         spoke = true;
         clearTimeout(watchdog);
-        clearStall();
+        // 开口后不能撤掉监控：实测出现过「9 个字念了 20.9 秒」的句中冻结，
+        // 需要用同一个 stall 计时器继续盯着"卡在句中"。
+        armStall();
         trace({ kind: 'start', idx: i, afterMs: Date.now() - speakT0, chunk: chunk.index });
       };
 

@@ -778,7 +778,7 @@
     })();
   </script>
 
-  <!-- 百度统计（hm.baidu.com）：token 同 panmian 站点（../panmian/site/assets/analytics.js）。
+  <!-- 百度统计（hm.baidu.com）：token 为 tinttxt 独立站点（3259718…）。
        跨域脚本/信标在 COEP: credentialless 下放行（require-corp 会被拦，见 _headers）。
        localhost/127.0.0.1 不注入：本地开发与自动化门禁不污染线上统计。 -->
   <script>
@@ -787,7 +787,7 @@
       var h = location.hostname;
       if (h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return;
       var hm = document.createElement('script');
-      hm.src = 'https://hm.baidu.com/hm.js?79d072285b218de43d09fe4410afa1f9';
+      hm.src = 'https://hm.baidu.com/hm.js?3259718cb25066080c309625bb85626e';
       hm.async = true;
       var s = document.getElementsByTagName('script')[0];
       s.parentNode.insertBefore(hm, s);

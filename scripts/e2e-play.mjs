@@ -128,7 +128,7 @@ async function main() {
   console.log(`\n== 打开 ${BASE}/?debug ==`);
   await send('Page.navigate', { url: `${BASE}/?debug` });
   let ready = false;
-  for (let i = 0; i < 60 && !ready; i++) {
+  for (let i = 0; i < 200 && !ready; i++) {
     await sleep(250);
     try { ready = (await evalJs('window.__TINTTXT__ ? 1 : 0')) === 1; } catch { /* nav */ }
   }
